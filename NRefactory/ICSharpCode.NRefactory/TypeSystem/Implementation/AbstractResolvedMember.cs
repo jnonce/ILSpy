@@ -1,4 +1,4 @@
-﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+﻿// Copyright (c) 2010-2013 AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -76,19 +76,26 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 						result.Add(member);
 				}
 				return result.ToArray();
-			} else if (unresolved.IsStatic) {
+			} else if (unresolved.IsStatic || !unresolved.IsPublic || DeclaringTypeDefinition == null || DeclaringTypeDefinition.Kind == TypeKind.Interface) {
 				return EmptyList<IMember>.Instance;
 			} else {
 				// TODO: implement interface member mappings correctly
-				return InheritanceHelper.GetBaseMembers(this, true)
+				var result = InheritanceHelper.GetBaseMembers(this, true)
 					.Where(m => m.DeclaringTypeDefinition != null && m.DeclaringTypeDefinition.Kind == TypeKind.Interface)
 					.ToArray();
+
+				IEnumerable<IMember> otherMembers = DeclaringTypeDefinition.Members;
+				if (SymbolKind == SymbolKind.Accessor)
+					otherMembers = DeclaringTypeDefinition.GetAccessors(options: GetMemberOptions.IgnoreInheritedMembers);
+				result = result.Where(item => !otherMembers.Any(m => m.IsExplicitInterfaceImplementation && m.ImplementedInterfaceMembers.Contains(item))).ToArray();
+
+				return result;
 			}
 		}
 		
 		public override DocumentationComment Documentation {
 			get {
-				IUnresolvedDocumentationProvider docProvider = unresolved.ParsedFile as IUnresolvedDocumentationProvider;
+				IUnresolvedDocumentationProvider docProvider = unresolved.UnresolvedFile as IUnresolvedDocumentationProvider;
 				if (docProvider != null) {
 					var doc = docProvider.GetDocumentation(unresolved, this);
 					if (doc != null)
@@ -113,15 +120,31 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 		public bool IsOverridable {
 			get { return unresolved.IsOverridable; }
 		}
+
+		public TypeParameterSubstitution Substitution {
+			get { return TypeParameterSubstitution.Identity; }
+		}
+
+		public abstract IMember Specialize(TypeParameterSubstitution substitution);
 		
-		public virtual IMemberReference ToMemberReference()
+		IMemberReference IMember.ToReference()
+		{
+			return (IMemberReference)ToReference();
+		}
+		
+		public override ISymbolReference ToReference()
 		{
 			var declTypeRef = this.DeclaringType.ToTypeReference();
 			if (IsExplicitInterfaceImplementation && ImplementedInterfaceMembers.Count == 1) {
-				return new ExplicitInterfaceImplementationMemberReference(declTypeRef, ImplementedInterfaceMembers[0].ToMemberReference());
+				return new ExplicitInterfaceImplementationMemberReference(declTypeRef, ImplementedInterfaceMembers[0].ToReference());
 			} else {
-				return new DefaultMemberReference(this.EntityType, declTypeRef, this.Name);
+				return new DefaultMemberReference(this.SymbolKind, declTypeRef, this.Name);
 			}
+		}
+		
+		public virtual IMemberReference ToMemberReference()
+		{
+			return (IMemberReference)ToReference();
 		}
 		
 		internal IMethod GetAccessor(ref IMethod accessorField, IUnresolvedMethod unresolvedAccessor)
@@ -132,8 +155,13 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 			if (result != null) {
 				return result;
 			} else {
-				return LazyInit.GetOrSet(ref accessorField, (IMethod)unresolvedAccessor.CreateResolved(context));
+				return LazyInit.GetOrSet(ref accessorField, CreateResolvedAccessor(unresolvedAccessor));
 			}
+		}
+		
+		protected virtual IMethod CreateResolvedAccessor(IUnresolvedMethod unresolvedAccessor)
+		{
+			return (IMethod)unresolvedAccessor.CreateResolved(context);
 		}
 	}
 }

@@ -22,6 +22,8 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Documents;
 using ICSharpCode.Decompiler;
 using ICSharpCode.ILSpy.TextView;
 using ICSharpCode.TreeView;
@@ -61,9 +63,16 @@ namespace ICSharpCode.ILSpy.TreeNodes
 			get { return assembly; }
 		}
 
+		public override bool IsAutoLoaded
+		{
+			get { 
+				return assembly.IsAutoLoaded; 
+			}
+		}
+
 		public override object Text
 		{
-			get { return HighlightSearchMatch(assembly.ShortName); }
+			get { return HighlightSearchMatch(assembly.Text); }
 		}
 
 		public override object Icon
@@ -78,20 +87,50 @@ namespace ICSharpCode.ILSpy.TreeNodes
 			}
 		}
 
+		TextBlock tooltip;
+
+		public override object ToolTip
+		{
+			get {
+				if (assembly.HasLoadError)
+					return "Assembly could not be loaded. Click here for details.";
+
+				if (tooltip == null) {
+					tooltip = new TextBlock();
+					tooltip.Inlines.Add(new Bold(new Run("Name: ")));
+					tooltip.Inlines.Add(new Run(assembly.AssemblyDefinition.FullName));
+					tooltip.Inlines.Add(new LineBreak());
+					tooltip.Inlines.Add(new Bold(new Run("Location: ")));
+					tooltip.Inlines.Add(new Run(assembly.FileName));
+					tooltip.Inlines.Add(new LineBreak());
+					tooltip.Inlines.Add(new Bold(new Run("Architecture: ")));
+					tooltip.Inlines.Add(new Run(CSharpLanguage.GetPlatformDisplayName(assembly.AssemblyDefinition.MainModule)));
+					string runtimeName = CSharpLanguage.GetRuntimeDisplayName(assembly.AssemblyDefinition.MainModule);
+					if (runtimeName != null) {
+						tooltip.Inlines.Add(new LineBreak());
+						tooltip.Inlines.Add(new Bold(new Run("Runtime: ")));
+						tooltip.Inlines.Add(new Run(runtimeName));
+					}
+				}
+
+				return tooltip;
+			}
+		}
+
 		public override bool ShowExpander
 		{
 			get { return !assembly.HasLoadError; }
 		}
 
-		void OnAssemblyLoaded(Task<AssemblyDefinition> assemblyTask)
+		void OnAssemblyLoaded(Task<ModuleDefinition> moduleTask)
 		{
 			// change from "Loading" icon to final icon
 			RaisePropertyChanged("Icon");
 			RaisePropertyChanged("ExpandedIcon");
-			if (assemblyTask.IsFaulted) {
+			if (moduleTask.IsFaulted) {
 				RaisePropertyChanged("ShowExpander"); // cannot expand assemblies with load error
 				// observe the exception so that the Task's finalizer doesn't re-throw it
-				try { assemblyTask.Wait(); }
+				try { moduleTask.Wait(); }
 				catch (AggregateException) { }
 			} else {
 				RaisePropertyChanged("Text"); // shortname might have changed
@@ -102,20 +141,19 @@ namespace ICSharpCode.ILSpy.TreeNodes
 
 		protected override void LoadChildren()
 		{
-			AssemblyDefinition assemblyDefinition = assembly.AssemblyDefinition;
-			if (assemblyDefinition == null) {
+			ModuleDefinition moduleDefinition = assembly.ModuleDefinition;
+			if (moduleDefinition == null) {
 				// if we crashed on loading, then we don't have any children
 				return;
 			}
-			ModuleDefinition mainModule = assemblyDefinition.MainModule;
 
-			this.Children.Add(new ReferenceFolderTreeNode(mainModule, this));
-			if (mainModule.HasResources)
-				this.Children.Add(new ResourceListTreeNode(mainModule));
+			this.Children.Add(new ReferenceFolderTreeNode(moduleDefinition, this));
+			if (moduleDefinition.HasResources)
+				this.Children.Add(new ResourceListTreeNode(moduleDefinition));
 			foreach (NamespaceTreeNode ns in namespaces.Values) {
 				ns.Children.Clear();
 			}
-			foreach (TypeDefinition type in mainModule.Types.OrderBy(t => t.FullName)) {
+			foreach (TypeDefinition type in moduleDefinition.Types.OrderBy(t => t.FullName)) {
 				NamespaceTreeNode ns;
 				if (!namespaces.TryGetValue(type.Namespace, out ns)) {
 					ns = new NamespaceTreeNode(type.Namespace);
@@ -277,6 +315,67 @@ namespace ICSharpCode.ILSpy.TreeNodes
 			foreach (var node in context.SelectedTreeNodes) {
 				node.Delete();
 			}
+		}
+	}
+
+	[ExportContextMenuEntryAttribute(Header = "_Load Dependencies")]
+	sealed class LoadDependencies : IContextMenuEntry
+	{
+		public bool IsVisible(TextViewContext context)
+		{
+			if (context.SelectedTreeNodes == null)
+				return false;
+			return context.SelectedTreeNodes.All(n => n is AssemblyTreeNode);
+		}
+
+		public bool IsEnabled(TextViewContext context)
+		{
+			return true;
+		}
+
+		public void Execute(TextViewContext context)
+		{
+			if (context.SelectedTreeNodes == null)
+				return;
+			foreach (var node in context.SelectedTreeNodes) {
+				var la = ((AssemblyTreeNode)node).LoadedAssembly;
+				if (!la.HasLoadError) {
+					foreach (var assyRef in la.ModuleDefinition.AssemblyReferences) {
+						la.LookupReferencedAssembly(assyRef.FullName);
+					}
+				}
+			}
+			MainWindow.Instance.RefreshDecompiledView();
+		}
+	}
+
+	[ExportContextMenuEntryAttribute(Header = "_Add To Main List")]
+	sealed class AddToMainList : IContextMenuEntry
+	{
+		public bool IsVisible(TextViewContext context)
+		{
+			if (context.SelectedTreeNodes == null)
+				return false;
+			return context.SelectedTreeNodes.Where(n => n is AssemblyTreeNode).Any(n=>((AssemblyTreeNode)n).IsAutoLoaded);
+		}
+
+		public bool IsEnabled(TextViewContext context)
+		{
+			return true;
+		}
+
+		public void Execute(TextViewContext context)
+		{
+			if (context.SelectedTreeNodes == null)
+				return;
+			foreach (var node in context.SelectedTreeNodes) {
+				var loadedAssm = ((AssemblyTreeNode)node).LoadedAssembly;
+				if (!loadedAssm.HasLoadError) {
+					loadedAssm.IsAutoLoaded = false;
+					node.RaisePropertyChanged("Foreground");
+				}
+			}
+			MainWindow.Instance.CurrentAssemblyList.RefreshSave();
 		}
 	}
 }

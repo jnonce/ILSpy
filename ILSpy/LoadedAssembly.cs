@@ -30,12 +30,12 @@ namespace ICSharpCode.ILSpy
 	/// </summary>
 	public sealed class LoadedAssembly
 	{
-		readonly Task<AssemblyDefinition> assemblyTask;
+		readonly Task<ModuleDefinition> assemblyTask;
 		readonly AssemblyList assemblyList;
 		readonly string fileName;
 		readonly string shortName;
 		
-		public LoadedAssembly(AssemblyList assemblyList, string fileName)
+		public LoadedAssembly(AssemblyList assemblyList, string fileName, Stream stream = null)
 		{
 			if (assemblyList == null)
 				throw new ArgumentNullException("assemblyList");
@@ -44,21 +44,32 @@ namespace ICSharpCode.ILSpy
 			this.assemblyList = assemblyList;
 			this.fileName = fileName;
 			
-			this.assemblyTask = Task.Factory.StartNew<AssemblyDefinition>(LoadAssembly); // requires that this.fileName is set
+			this.assemblyTask = Task.Factory.StartNew<ModuleDefinition>(LoadAssembly, stream); // requires that this.fileName is set
 			this.shortName = Path.GetFileNameWithoutExtension(fileName);
 		}
 		
 		/// <summary>
-		/// Gets the Cecil AssemblyDefinition.
+		/// Gets the Cecil ModuleDefinition.
 		/// Can be null when there was a load error.
 		/// </summary>
-		public AssemblyDefinition AssemblyDefinition {
+		public ModuleDefinition ModuleDefinition {
 			get {
 				try {
 					return assemblyTask.Result;
 				} catch (AggregateException) {
 					return null;
 				}
+			}
+		}
+		
+		/// <summary>
+		/// Gets the Cecil AssemblyDefinition.
+		/// Is null when there was a load error; or when opening a netmodule.
+		/// </summary>
+		public AssemblyDefinition AssemblyDefinition {
+			get {
+				var module = this.ModuleDefinition;
+				return module != null ? module.Assembly : null;
 			}
 		}
 		
@@ -73,6 +84,16 @@ namespace ICSharpCode.ILSpy
 		public string ShortName {
 			get { return shortName; }
 		}
+
+		public string Text {
+			get {
+				if (AssemblyDefinition != null) {
+					return String.Format("{0} ({1})", ShortName, AssemblyDefinition.Name.Version);
+				} else {
+					return ShortName;
+				}
+			}
+		}
 		
 		public bool IsLoaded {
 			get { return assemblyTask.IsCompleted; }
@@ -81,23 +102,39 @@ namespace ICSharpCode.ILSpy
 		public bool HasLoadError {
 			get { return assemblyTask.IsFaulted; }
 		}
-		
-		AssemblyDefinition LoadAssembly()
+
+		public bool IsAutoLoaded { get; set; }
+
+		ModuleDefinition LoadAssembly(object state)
 		{
+			var stream = state as Stream;
+			ModuleDefinition module;
+
 			// runs on background thread
 			ReaderParameters p = new ReaderParameters();
 			p.AssemblyResolver = new MyAssemblyResolver(this);
-			AssemblyDefinition asm = AssemblyDefinition.ReadAssembly(fileName, p);
+
+			if (stream != null)
+			{
+				// Read the module from a precrafted stream
+				module = ModuleDefinition.ReadModule(stream, p);
+			}
+			else
+			{
+				// Read the module from disk (by default)
+				module = ModuleDefinition.ReadModule(fileName, p);
+			}
+
 			if (DecompilerSettingsPanel.CurrentDecompilerSettings.UseDebugSymbols) {
 				try {
-					LoadSymbols(asm.MainModule);
+					LoadSymbols(module);
 				} catch (IOException) {
 				} catch (UnauthorizedAccessException) {
 				} catch (InvalidOperationException) {
 					// ignore any errors during symbol loading
 				}
 			}
-			return asm;
+			return module;
 		}
 		
 		private void LoadSymbols(ModuleDefinition module)
@@ -217,7 +254,8 @@ namespace ICSharpCode.ILSpy
 					file = Path.Combine(dir, name.Name + ".exe");
 			}
 			if (file != null) {
-				return assemblyList.OpenAssembly(file);
+				var loaded = assemblyList.OpenAssembly(file, true);
+				return loaded;
 			} else {
 				return null;
 			}
@@ -238,13 +276,13 @@ namespace ICSharpCode.ILSpy
 			
 			string file = Path.Combine(Environment.SystemDirectory, "WinMetadata", name + ".winmd");
 			if (File.Exists(file)) {
-				return assemblyList.OpenAssembly(file);
+				return assemblyList.OpenAssembly(file, true);
 			} else {
 				return null;
 			}
 		}
 		
-		public Task ContinueWhenLoaded(Action<Task<AssemblyDefinition>> onAssemblyLoaded, TaskScheduler taskScheduler)
+		public Task ContinueWhenLoaded(Action<Task<ModuleDefinition>> onAssemblyLoaded, TaskScheduler taskScheduler)
 		{
 			return this.assemblyTask.ContinueWith(onAssemblyLoaded, taskScheduler);
 		}
@@ -257,5 +295,6 @@ namespace ICSharpCode.ILSpy
 		{
 			assemblyTask.Wait();
 		}
+
 	}
 }

@@ -1,4 +1,4 @@
-﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+﻿// Copyright (c) 2010-2013 AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -101,16 +101,14 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 			{
 				this.Member = member;
 				this.IsExpandedForm = isExpanded;
-				IMethod method = member as IMethod;
-				if (method != null && method.TypeParameters.Count > 0) {
-					// For generic methods, go back to the original parameters
-					// (without any type parameter substitution, not even class type parameters)
-					// We'll re-substitute them as part of RunTypeInference().
-					method = (IMethod)method.MemberDefinition;
-					this.Parameters = method.Parameters;
-					this.TypeParameters = method.TypeParameters;
-				} else {
-					this.Parameters = member.Parameters;
+				IParameterizedMember memberDefinition = (IParameterizedMember)member.MemberDefinition;
+				// For specificialized methods, go back to the original parameters:
+				// (without any type parameter substitution, not even class type parameters)
+				// We'll re-substitute them as part of RunTypeInference().
+				this.Parameters = memberDefinition.Parameters;
+				IMethod methodDefinition = memberDefinition as IMethod;
+				if (methodDefinition != null && methodDefinition.TypeParameters.Count > 0) {
+					this.TypeParameters = methodDefinition.TypeParameters;
 				}
 				this.ParameterTypes = new IType[this.Parameters.Count];
 			}
@@ -118,7 +116,8 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 			public void AddError(OverloadResolutionErrors newError)
 			{
 				this.Errors |= newError;
-				this.ErrorCount++;
+				if (!IsApplicable(newError))
+					this.ErrorCount++;
 			}
 		}
 		
@@ -130,6 +129,8 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 		Candidate bestCandidate;
 		Candidate bestCandidateAmbiguousWith;
 		IType[] explicitlyGivenTypeArguments;
+		bool bestCandidateWasValidated;
+		OverloadResolutionErrors bestCandidateValidationResult;
 		
 		#region Constructor
 		public OverloadResolution(ICompilation compilation, ResolveResult[] arguments, string[] argumentNames = null, IType[] typeArguments = null, CSharpConversions conversions = null)
@@ -152,9 +153,11 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 			
 			this.conversions = conversions ?? CSharpConversions.Get(compilation);
 			this.AllowExpandingParams = true;
+			this.AllowOptionalParameters = true;
 		}
 		#endregion
 		
+		#region Input Properties
 		/// <summary>
 		/// Gets/Sets whether the methods are extension methods that are being called using extension method syntax.
 		/// </summary>
@@ -171,26 +174,55 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 		public bool AllowExpandingParams { get; set; }
 		
 		/// <summary>
+		/// Gets/Sets whether optional parameters may be left at their default value.
+		/// The default value is true.
+		/// If this property is set to false, optional parameters will be treated like regular parameters.
+		/// </summary>
+		public bool AllowOptionalParameters { get; set; }
+		
+		/// <summary>
+		/// Gets/Sets whether ConversionResolveResults created by this OverloadResolution
+		/// instance apply overflow checking.
+		/// The default value is false.
+		/// </summary>
+		public bool CheckForOverflow { get; set; }
+		
+		/// <summary>
 		/// Gets the arguments for which this OverloadResolution instance was created.
 		/// </summary>
 		public IList<ResolveResult> Arguments {
 			get { return arguments; }
 		}
+		#endregion
 		
 		#region AddCandidate
+		/// <summary>
+		/// Adds a candidate to overload resolution.
+		/// </summary>
+		/// <param name="member">The candidate member to add.</param>
+		/// <returns>The errors that prevent the member from being applicable, if any.
+		/// Note: this method does not return errors that do not affect applicability.</returns>
 		public OverloadResolutionErrors AddCandidate(IParameterizedMember member)
 		{
 			return AddCandidate(member, OverloadResolutionErrors.None);
 		}
 		
+		/// <summary>
+		/// Adds a candidate to overload resolution.
+		/// </summary>
+		/// <param name="member">The candidate member to add.</param>
+		/// <param name="additionalErrors">Additional errors that apply to the candidate.
+		/// This is used to represent errors during member lookup (e.g. OverloadResolutionErrors.Inaccessible)
+		/// in overload resolution.</param>
+		/// <returns>The errors that prevent the member from being applicable, if any.
+		/// Note: this method does not return errors that do not affect applicability.</returns>
 		public OverloadResolutionErrors AddCandidate(IParameterizedMember member, OverloadResolutionErrors additionalErrors)
 		{
 			if (member == null)
 				throw new ArgumentNullException("member");
 			
 			Candidate c = new Candidate(member, false);
-			if (additionalErrors != OverloadResolutionErrors.None)
-				c.AddError(additionalErrors);
+			c.AddError(additionalErrors);
 			if (CalculateCandidate(c)) {
 				//candidates.Add(c);
 			}
@@ -199,8 +231,7 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 			    && member.Parameters[member.Parameters.Count - 1].IsParams)
 			{
 				Candidate expandedCandidate = new Candidate(member, true);
-				if (additionalErrors != OverloadResolutionErrors.None)
-					expandedCandidate.AddError(additionalErrors);
+				expandedCandidate.AddError(additionalErrors);
 				// consider expanded form only if it isn't obviously wrong
 				if (CalculateCandidate(expandedCandidate)) {
 					//candidates.Add(expandedCandidate);
@@ -212,18 +243,13 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 			return c.Errors;
 		}
 		
-		public static bool IsApplicable(OverloadResolutionErrors errors)
-		{
-			return (errors & ~OverloadResolutionErrors.AmbiguousMatch) == OverloadResolutionErrors.None;
-		}
-		
 		/// <summary>
 		/// Calculates applicability etc. for the candidate.
 		/// </summary>
 		/// <returns>True if the calculation was successful, false if the candidate should be removed without reporting an error</returns>
 		bool CalculateCandidate(Candidate candidate)
 		{
-			if (!ResolveParameterTypes(candidate))
+			if (!ResolveParameterTypes(candidate, false))
 				return false;
 			MapCorrespondingParameters(candidate);
 			RunTypeInference(candidate);
@@ -232,10 +258,18 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 			return true;
 		}
 		
-		bool ResolveParameterTypes(Candidate candidate)
+		bool ResolveParameterTypes(Candidate candidate, bool useSpecializedParameters)
 		{
 			for (int i = 0; i < candidate.Parameters.Count; i++) {
-				IType type = candidate.Parameters[i].Type;
+				IType type;
+				if (useSpecializedParameters) {
+					// Use the parameter type of the specialized non-generic method or indexer
+					Debug.Assert(!candidate.IsGenericMethod);
+					type = candidate.Member.Parameters[i].Type;
+				} else {
+					// Use the type of the original formal parameter
+					type = candidate.Parameters[i].Type;
+				}
 				if (candidate.IsExpandedForm && i == candidate.Parameters.Count - 1) {
 					ArrayType arrayType = type as ArrayType;
 					if (arrayType != null && arrayType.Dimensions == 1)
@@ -344,12 +378,13 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 		#region RunTypeInference
 		void RunTypeInference(Candidate candidate)
 		{
-			IMethod method = candidate.Member as IMethod;
-			if (method == null || method.TypeParameters.Count == 0) {
+			if (candidate.TypeParameters == null) {
 				if (explicitlyGivenTypeArguments != null) {
 					// method does not expect type arguments, but was given some
 					candidate.AddError(OverloadResolutionErrors.WrongNumberOfTypeArguments);
 				}
+				// Grab new parameter types:
+				ResolveParameterTypes(candidate, true);
 				return;
 			}
 			ParameterizedType parameterizedDeclaringType = candidate.Member.DeclaringType as ParameterizedType;
@@ -361,12 +396,12 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 			}
 			// The method is generic:
 			if (explicitlyGivenTypeArguments != null) {
-				if (explicitlyGivenTypeArguments.Length == method.TypeParameters.Count) {
+				if (explicitlyGivenTypeArguments.Length == candidate.TypeParameters.Count) {
 					candidate.InferredTypes = explicitlyGivenTypeArguments;
 				} else {
 					candidate.AddError(OverloadResolutionErrors.WrongNumberOfTypeArguments);
 					// wrong number of type arguments given, so truncate the list or pad with UnknownType
-					candidate.InferredTypes = new IType[method.TypeParameters.Count];
+					candidate.InferredTypes = new IType[candidate.TypeParameters.Count];
 					for (int i = 0; i < candidate.InferredTypes.Length; i++) {
 						if (i < explicitlyGivenTypeArguments.Length)
 							candidate.InferredTypes[i] = explicitlyGivenTypeArguments[i];
@@ -425,20 +460,35 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 		#endregion
 		
 		#region Validate Constraints
+		OverloadResolutionErrors ValidateMethodConstraints(Candidate candidate)
+		{
+			// If type inference already failed, we won't check the constraints:
+			if ((candidate.Errors & OverloadResolutionErrors.TypeInferenceFailed) != 0)
+				return OverloadResolutionErrors.None;
+			
+			if (candidate.TypeParameters == null || candidate.TypeParameters.Count == 0)
+				return OverloadResolutionErrors.None; // the method isn't generic
+			var substitution = GetSubstitution(candidate);
+			for (int i = 0; i < candidate.TypeParameters.Count; i++) {
+				if (!ValidateConstraints(candidate.TypeParameters[i], substitution.MethodTypeArguments[i], substitution))
+					return OverloadResolutionErrors.MethodConstraintsNotSatisfied;
+			}
+			return OverloadResolutionErrors.None;
+		}
+		
 		/// <summary>
 		/// Validates whether the given type argument satisfies the constraints for the given type parameter.
 		/// </summary>
 		/// <param name="typeParameter">The type parameter.</param>
 		/// <param name="typeArgument">The type argument.</param>
 		/// <param name="substitution">The substitution that defines how type parameters are replaced with type arguments.
-		/// The substitution is used to check constraints that depend on other type parameters (or recursively on the same type parameter).</param>
+		/// The substitution is used to check constraints that depend on other type parameters (or recursively on the same type parameter).
+		/// May be null if no substitution should be used.</param>
 		/// <returns>True if the constraints are satisfied; false otherwise.</returns>
-		public static bool ValidateConstraints(ITypeParameter typeParameter, IType typeArgument, TypeVisitor substitution)
+		public static bool ValidateConstraints(ITypeParameter typeParameter, IType typeArgument, TypeVisitor substitution = null)
 		{
 			if (typeParameter == null)
 				throw new ArgumentNullException("typeParameter");
-			if (typeParameter.Owner == null)
-				throw new ArgumentNullException("typeParameter.Owner");
 			if (typeArgument == null)
 				throw new ArgumentNullException("typeArgument");
 			return ValidateConstraints(typeParameter, typeArgument, substitution, CSharpConversions.Get(typeParameter.Owner.Compilation));
@@ -483,6 +533,16 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 		#endregion
 		
 		#region CheckApplicability
+		/// <summary>
+		/// Returns whether a candidate with the given errors is still considered to be applicable.
+		/// </summary>
+		public static bool IsApplicable(OverloadResolutionErrors errors)
+		{
+			const OverloadResolutionErrors errorsThatDoNotMatterForApplicability =
+				OverloadResolutionErrors.AmbiguousMatch | OverloadResolutionErrors.MethodConstraintsNotSatisfied;
+			return (errors & ~errorsThatDoNotMatterForApplicability) == OverloadResolutionErrors.None;
+		}
+		
 		void CheckApplicability(Candidate candidate)
 		{
 			// C# 4.0 spec: §7.5.3.1 Applicable function member
@@ -497,7 +557,7 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 				if (candidate.IsExpandedForm && i == argumentCountPerParameter.Length - 1)
 					continue; // any number of arguments is fine for the params-array
 				if (argumentCountPerParameter[i] == 0) {
-					if (candidate.Parameters[i].IsOptional)
+					if (this.AllowOptionalParameters && candidate.Parameters[i].IsOptional)
 						candidate.HasUnmappedOptionalParameters = true;
 					else
 						candidate.AddError(OverloadResolutionErrors.MissingArgumentForRequiredParameter);
@@ -531,7 +591,7 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 					if (!(c == Conversion.IdentityConversion || c == Conversion.ImplicitReferenceConversion || c == Conversion.BoxingConversion))
 						candidate.AddError(OverloadResolutionErrors.ArgumentTypeMismatch);
 				} else {
-					if (!c.IsValid && parameterType.Kind != TypeKind.Unknown)
+					if ((!c.IsValid && !c.IsUserDefined && !c.IsMethodGroupConversion) && parameterType.Kind != TypeKind.Unknown)
 						candidate.AddError(OverloadResolutionErrors.ArgumentTypeMismatch);
 				}
 			}
@@ -690,6 +750,7 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 		{
 			if (bestCandidate == null) {
 				bestCandidate = candidate;
+				bestCandidateWasValidated = false;
 			} else {
 				switch (BetterFunctionMember(candidate, bestCandidate)) {
 					case 0:
@@ -700,6 +761,7 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 						break;
 					case 1:
 						bestCandidate = candidate;
+						bestCandidateWasValidated = false;
 						bestCandidateAmbiguousWith = null;
 						break;
 						// case 2: best candidate stays best
@@ -708,15 +770,24 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 		}
 		#endregion
 		
+		#region Output Properties
 		public IParameterizedMember BestCandidate {
 			get { return bestCandidate != null ? bestCandidate.Member : null; }
 		}
 		
+		/// <summary>
+		/// Returns the errors that apply to the best candidate.
+		/// This includes additional errors that do not affect applicability (e.g. AmbiguousMatch, MethodConstraintsNotSatisfied)
+		/// </summary>
 		public OverloadResolutionErrors BestCandidateErrors {
 			get {
 				if (bestCandidate == null)
 					return OverloadResolutionErrors.None;
-				OverloadResolutionErrors err = bestCandidate.Errors;
+				if (!bestCandidateWasValidated) {
+					bestCandidateValidationResult = ValidateMethodConstraints(bestCandidate);
+					bestCandidateWasValidated = true;
+				}
+				OverloadResolutionErrors err = bestCandidate.Errors | bestCandidateValidationResult;
 				if (bestCandidateAmbiguousWith != null)
 					err |= OverloadResolutionErrors.AmbiguousMatch;
 				return err;
@@ -724,7 +795,7 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 		}
 		
 		public bool FoundApplicableCandidate {
-			get { return bestCandidate != null && bestCandidate.Errors == OverloadResolutionErrors.None; }
+			get { return bestCandidate != null && IsApplicable(bestCandidate.Errors); }
 		}
 		
 		public IParameterizedMember BestCandidateAmbiguousWith {
@@ -774,15 +845,35 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 				return null;
 		}
 		
+		/// <summary>
+		/// Returns the arguments for the method call in the order they were provided (not in the order of the parameters).
+		/// Arguments are wrapped in a <see cref="ConversionResolveResult"/> if an implicit conversion is being applied
+		/// to them when calling the method.
+		/// </summary>
 		public IList<ResolveResult> GetArgumentsWithConversions()
 		{
 			if (bestCandidate == null)
 				return arguments;
 			else
-				return GetArgumentsWithConversions(null);
+				return GetArgumentsWithConversions(null, null);
 		}
 		
-		IList<ResolveResult> GetArgumentsWithConversions(ResolveResult targetResolveResult)
+		/// <summary>
+		/// Returns the arguments for the method call in the order they were provided (not in the order of the parameters).
+		/// Arguments are wrapped in a <see cref="ConversionResolveResult"/> if an implicit conversion is being applied
+		/// to them when calling the method.
+		/// For arguments where an explicit argument name was provided, the argument will
+		/// be wrapped in a <see cref="NamedArgumentResolveResult"/>.
+		/// </summary>
+		public IList<ResolveResult> GetArgumentsWithConversionsAndNames()
+		{
+			if (bestCandidate == null)
+				return arguments;
+			else
+				return GetArgumentsWithConversions(null, GetBestCandidateWithSubstitutedTypeArguments());
+		}
+		
+		IList<ResolveResult> GetArgumentsWithConversions(ResolveResult targetResolveResult, IParameterizedMember bestCandidateForNamedArguments)
 		{
 			var conversions = this.ArgumentConversions;
 			ResolveResult[] args = new ResolveResult[arguments.Length];
@@ -790,22 +881,27 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 				var argument = arguments[i];
 				if (this.IsExtensionMethodInvocation && i == 0 && targetResolveResult != null)
 					argument = targetResolveResult;
-				if (conversions[i] == Conversion.IdentityConversion) {
-					args[i] = argument;
-				} else {
-					int parameterIndex = bestCandidate.ArgumentToParameterMap[i];
-					IType parameterType;
-					if (parameterIndex >= 0) {
-						parameterType = bestCandidate.ParameterTypes[parameterIndex];
-					} else {
-						parameterType = SpecialType.UnknownType;
-					}
-					if (arguments[i].IsCompileTimeConstant && conversions[i] != Conversion.None) {
-						args[i] = new CSharpResolver(compilation).ResolveCast(parameterType, argument);
-					} else {
-						args[i] = new ConversionResolveResult(parameterType, argument, conversions[i]);
+				int parameterIndex = bestCandidate.ArgumentToParameterMap[i];
+				if (parameterIndex >= 0 && conversions[i] != Conversion.IdentityConversion) {
+					// Wrap argument in ConversionResolveResult
+					IType parameterType = bestCandidate.ParameterTypes[parameterIndex];
+					if (parameterType.Kind != TypeKind.Unknown) {
+						if (arguments[i].IsCompileTimeConstant && conversions[i].IsValid && !conversions[i].IsUserDefined) {
+							argument = new CSharpResolver(compilation).WithCheckForOverflow(CheckForOverflow).ResolveCast(parameterType, argument);
+						} else {
+							argument = new ConversionResolveResult(parameterType, argument, conversions[i], CheckForOverflow);
+						}
 					}
 				}
+				if (bestCandidateForNamedArguments != null && argumentNames[i] != null) {
+					// Wrap argument in NamedArgumentResolveResult
+					if (parameterIndex >= 0) {
+						argument = new NamedArgumentResolveResult(bestCandidateForNamedArguments.Parameters[parameterIndex], argument, bestCandidateForNamedArguments);
+					} else {
+						argument = new NamedArgumentResolveResult(argumentNames[i], argument);
+					}
+				}
+				args[i] = argument;
 			}
 			return args;
 		}
@@ -816,19 +912,17 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 				return null;
 			IMethod method = bestCandidate.Member as IMethod;
 			if (method != null && method.TypeParameters.Count > 0) {
-				SpecializedMethod sm = method as SpecializedMethod;
-				if (sm != null) {
-					// Do not compose the substitutions, but merge them.
-					// This is required for InvocationTests.SubstituteClassAndMethodTypeParametersAtOnce
-					return new SpecializedMethod(
-						(IMethod)method.MemberDefinition,
-						new TypeParameterSubstitution(sm.Substitution.ClassTypeArguments, bestCandidate.InferredTypes));
-				} else {
-					return new SpecializedMethod(method, new TypeParameterSubstitution(null, bestCandidate.InferredTypes));
-				}
+				return ((IMethod)method.MemberDefinition).Specialize(GetSubstitution(bestCandidate));
 			} else {
 				return bestCandidate.Member;
 			}
+		}
+		
+		TypeParameterSubstitution GetSubstitution(Candidate candidate)
+		{
+			// Do not compose the substitutions, but merge them.
+			// This is required for InvocationTests.SubstituteClassAndMethodTypeParametersAtOnce
+			return new TypeParameterSubstitution(candidate.Member.Substitution.ClassTypeArguments, candidate.InferredTypes);
 		}
 		
 		/// <summary>
@@ -840,23 +934,27 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 		/// <param name="initializerStatements">
 		/// Statements for Objects/Collections initializer.
 		/// <see cref="InvocationResolveResult.InitializerStatements"/>
+		/// <param name="returnTypeOverride">
+		/// If not null, use this instead of the ReturnType of the member as the type of the created resolve result.
 		/// </param>
-		public CSharpInvocationResolveResult CreateResolveResult(ResolveResult targetResolveResult, IList<ResolveResult> initializerStatements = null)
+		public CSharpInvocationResolveResult CreateResolveResult(ResolveResult targetResolveResult, IList<ResolveResult> initializerStatements = null, IType returnTypeOverride = null)
 		{
 			IParameterizedMember member = GetBestCandidateWithSubstitutedTypeArguments();
 			if (member == null)
 				throw new InvalidOperationException();
-			
+
 			return new CSharpInvocationResolveResult(
 				this.IsExtensionMethodInvocation ? new TypeResolveResult(member.DeclaringType) : targetResolveResult,
 				member,
-				GetArgumentsWithConversions(targetResolveResult),
+				GetArgumentsWithConversions(targetResolveResult, member),
 				this.BestCandidateErrors,
 				this.IsExtensionMethodInvocation,
 				this.BestCandidateIsExpandedForm,
 				isDelegateInvocation: false,
 				argumentToParameterMap: this.GetArgumentToParameterMap(),
-				initializerStatements: initializerStatements);
+				initializerStatements: initializerStatements,
+				returnTypeOverride: returnTypeOverride);
 		}
+		#endregion
 	}
 }

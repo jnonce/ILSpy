@@ -1,4 +1,4 @@
-﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+﻿// Copyright (c) 2010-2013 AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -17,8 +17,6 @@
 // DEALINGS IN THE SOFTWARE.
 
 using System;
-using System.Collections.Generic;
-using System.Diagnostics.Contracts;
 
 namespace ICSharpCode.NRefactory.TypeSystem
 {
@@ -26,36 +24,33 @@ namespace ICSharpCode.NRefactory.TypeSystem
 	/// Represents a reference to a type.
 	/// Must be resolved before it can be used as type.
 	/// </summary>
-	#if WITH_CONTRACTS
-	[ContractClass(typeof(ITypeReferenceContract))]
-	#endif
 	public interface ITypeReference
 	{
 		// Keep this interface simple: I decided against having GetMethods/GetEvents etc. here,
 		// so that the Resolve step is never hidden from the consumer.
 		
-		// I decided against implementing IFreezable here: ITypeDefinition can be used as ITypeReference,
+		// I decided against implementing IFreezable here: IUnresolvedTypeDefinition can be used as ITypeReference,
 		// but when freezing the reference, one wouldn't expect the definition to freeze.
 		
 		/// <summary>
 		/// Resolves this type reference.
 		/// </summary>
+		/// <param name="context">
+		/// Context to use for resolving this type reference.
+		/// Which kind of context is required depends on the which kind of type reference this is;
+		/// please consult the documentation of the method that was used to create this type reference,
+		/// or that of the class implementing this method.
+		/// </param>
 		/// <returns>
 		/// Returns the resolved type.
-		/// In case of an error, returns <see cref="SpecialType.UnknownType"/>.
+		/// In case of an error, returns an unknown type (<see cref="TypeKind.Unknown"/>).
 		/// Never returns null.
 		/// </returns>
 		IType Resolve(ITypeResolveContext context);
 	}
 	
-	public interface ITypeResolveContext
+	public interface ITypeResolveContext : ICompilationProvider
 	{
-		/// <summary>
-		/// Gets the parent compilation.
-		/// This property never returns null.
-		/// </summary>
-		ICompilation Compilation { get; }
-		
 		/// <summary>
 		/// Gets the current assembly.
 		/// This property may return null if this context does not specify any assembly.
@@ -75,17 +70,4 @@ namespace ICSharpCode.NRefactory.TypeSystem
 		ITypeResolveContext WithCurrentTypeDefinition(ITypeDefinition typeDefinition);
 		ITypeResolveContext WithCurrentMember(IMember member);
 	}
-	
-	#if WITH_CONTRACTS
-	[ContractClassFor(typeof(ITypeReference))]
-	abstract class ITypeReferenceContract : ITypeReference
-	{
-		IType ITypeReference.Resolve(ITypeResolveContext context)
-		{
-			Contract.Requires(context != null);
-			Contract.Ensures(Contract.Result<IType>() != null);
-			return null;
-		}
-	}
-	#endif
 }

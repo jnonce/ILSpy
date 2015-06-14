@@ -1,4 +1,4 @@
-﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+﻿// Copyright (c) 2010-2013 AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -28,8 +28,8 @@ namespace ICSharpCode.NRefactory.Editor
 	public class TextChangeEventArgs : EventArgs
 	{
 		readonly int offset;
-		readonly string removedText;
-		readonly string insertedText;
+		readonly ITextSource removedText;
+		readonly ITextSource insertedText;
 		
 		/// <summary>
 		/// The offset at which the change occurs.
@@ -41,7 +41,7 @@ namespace ICSharpCode.NRefactory.Editor
 		/// <summary>
 		/// The text that was removed.
 		/// </summary>
-		public string RemovedText {
+		public ITextSource RemovedText {
 			get { return removedText; }
 		}
 		
@@ -49,13 +49,13 @@ namespace ICSharpCode.NRefactory.Editor
 		/// The number of characters removed.
 		/// </summary>
 		public int RemovalLength {
-			get { return removedText.Length; }
+			get { return removedText.TextLength; }
 		}
 		
 		/// <summary>
 		/// The text that was inserted.
 		/// </summary>
-		public string InsertedText {
+		public ITextSource InsertedText {
 			get { return insertedText; }
 		}
 		
@@ -63,7 +63,7 @@ namespace ICSharpCode.NRefactory.Editor
 		/// The number of characters inserted.
 		/// </summary>
 		public int InsertionLength {
-			get { return insertedText.Length; }
+			get { return insertedText.TextLength; }
 		}
 		
 		/// <summary>
@@ -71,9 +71,23 @@ namespace ICSharpCode.NRefactory.Editor
 		/// </summary>
 		public TextChangeEventArgs(int offset, string removedText, string insertedText)
 		{
+			if (offset < 0)
+				throw new ArgumentOutOfRangeException("offset", offset, "offset must not be negative");
 			this.offset = offset;
-			this.removedText = removedText ?? string.Empty;
-			this.insertedText = insertedText ?? string.Empty;
+			this.removedText = removedText != null ? new StringTextSource(removedText) : StringTextSource.Empty;
+			this.insertedText = insertedText != null ? new StringTextSource(insertedText) : StringTextSource.Empty;
+		}
+		
+		/// <summary>
+		/// Creates a new TextChangeEventArgs object.
+		/// </summary>
+		public TextChangeEventArgs(int offset, ITextSource removedText, ITextSource insertedText)
+		{
+			if (offset < 0)
+				throw new ArgumentOutOfRangeException("offset", offset, "offset must not be negative");
+			this.offset = offset;
+			this.removedText = removedText ?? StringTextSource.Empty;
+			this.insertedText = insertedText ?? StringTextSource.Empty;
 		}
 		
 		/// <summary>

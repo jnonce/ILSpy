@@ -1,4 +1,4 @@
-﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+﻿// Copyright (c) 2010-2013 AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -39,7 +39,7 @@ namespace ICSharpCode.NRefactory.TypeSystem
 		{
 			return GetBaseMembers(member, false).FirstOrDefault();
 		}
-		
+
 		/// <summary>
 		/// Gets all base members that have the same signature.
 		/// </summary>
@@ -50,15 +50,21 @@ namespace ICSharpCode.NRefactory.TypeSystem
 		{
 			if (member == null)
 				throw new ArgumentNullException("member");
-			
+
 			if (member.IsExplicitInterfaceImplementation && member.ImplementedInterfaceMembers.Count == 1) {
 				// C#-style explicit interface implementation
 				member = member.ImplementedInterfaceMembers[0];
 				yield return member;
 			}
 			
-			SpecializedMember specializedMember = member as SpecializedMember;
+			// Remove generic specialization
+			var substitution = member.Substitution;
 			member = member.MemberDefinition;
+			
+			if (member.DeclaringTypeDefinition == null) {
+				// For global methods, return empty list. (prevent SharpDevelop UDC crash 4524)
+				yield break;
+			}
 			
 			IEnumerable<IType> allBaseTypes;
 			if (includeImplementedInterfaces) {
@@ -69,13 +75,16 @@ namespace ICSharpCode.NRefactory.TypeSystem
 			foreach (IType baseType in allBaseTypes.Reverse()) {
 				if (baseType == member.DeclaringTypeDefinition)
 					continue;
-				
-				foreach (IMember baseMember in baseType.GetMembers(m => m.Name == member.Name, GetMemberOptions.IgnoreInheritedMembers)) {
+
+				IEnumerable<IMember> baseMembers;
+				if (member.SymbolKind == SymbolKind.Accessor) {
+					baseMembers = baseType.GetAccessors(m => m.Name == member.Name && !m.IsExplicitInterfaceImplementation, GetMemberOptions.IgnoreInheritedMembers);
+				} else {
+					baseMembers = baseType.GetMembers(m => m.Name == member.Name && !m.IsExplicitInterfaceImplementation, GetMemberOptions.IgnoreInheritedMembers);
+				}
+				foreach (IMember baseMember in baseMembers) {
 					if (SignatureComparer.Ordinal.Equals(member, baseMember)) {
-						if (specializedMember != null)
-							yield return SpecializedMember.Create(baseMember, specializedMember.Substitution);
-						else
-							yield return baseMember;
+						yield return baseMember.Specialize(substitution);
 					}
 				}
 			}
@@ -92,6 +101,9 @@ namespace ICSharpCode.NRefactory.TypeSystem
 				throw new ArgumentNullException("baseMember");
 			if (derivedType == null)
 				throw new ArgumentNullException("derivedType");
+			
+			if (baseMember.Compilation != derivedType.Compilation)
+				throw new ArgumentException("baseMember and derivedType must be from the same compilation");
 			
 			baseMember = baseMember.MemberDefinition;
 			bool includeInterfaces = baseMember.DeclaringTypeDefinition.Kind == TypeKind.Interface;

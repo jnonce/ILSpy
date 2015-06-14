@@ -1,4 +1,4 @@
-﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+﻿// Copyright (c) 2010-2013 AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -39,7 +39,7 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 		internal RareFields rareFields;
 		
 		// 1 byte per enum + 2 bytes for flags
-		EntityType entityType;
+		SymbolKind symbolKind;
 		Accessibility accessibility;
 		internal BitVector16 flags;
 		
@@ -50,10 +50,11 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 		internal const ushort FlagShadowing = 0x0008;
 		internal const ushort FlagSynthetic = 0x0010;
 		internal const ushort FlagStatic    = 0x0020;
-		// flags for DefaultUnresolvedTypeDefinition
+		// flags for DefaultUnresolvedTypeDefinition/LazyCecilTypeDefinition
 		internal const ushort FlagAddDefaultConstructorIfRequired = 0x0040;
 		internal const ushort FlagHasExtensionMethods = 0x0080;
 		internal const ushort FlagHasNoExtensionMethods = 0x0100;
+		internal const ushort FlagPartialTypeDefinition = 0x0200;
 		// flags for AbstractUnresolvedMember:
 		internal const ushort FlagExplicitInterfaceImplementation = 0x0040;
 		internal const ushort FlagVirtual = 0x0080;
@@ -61,10 +62,12 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 		// flags for DefaultField:
 		internal const ushort FlagFieldIsReadOnly = 0x1000;
 		internal const ushort FlagFieldIsVolatile = 0x2000;
+		internal const ushort FlagFieldIsFixedSize = 0x4000;
 		// flags for DefaultMethod:
 		internal const ushort FlagExtensionMethod = 0x1000;
-		internal const ushort FlagPartialMethodDeclaration = 0x2000;
-		internal const ushort FlagPartialMethodImplemenation = 0x4000;
+		internal const ushort FlagPartialMethod = 0x2000;
+		internal const ushort FlagHasBody = 0x4000;
+		internal const ushort FlagAsyncMethod = 0x8000;
 		
 		public bool IsFrozen {
 			get { return flags[FlagFrozen]; }
@@ -85,7 +88,13 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 				rareFields.FreezeInternal();
 		}
 		
-		public virtual void ApplyInterningProvider(IInterningProvider provider)
+		/// <summary>
+		/// Uses the specified interning provider to intern
+		/// strings and lists in this entity.
+		/// This method does not test arbitrary objects to see if they implement ISupportsInterning;
+		/// instead we assume that those are interned immediately when they are created (before they are added to this entity).
+		/// </summary>
+		public virtual void ApplyInterningProvider(InterningProvider provider)
 		{
 			if (provider == null)
 				throw new ArgumentNullException("provider");
@@ -96,19 +105,41 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 				rareFields.ApplyInterningProvider(provider);
 		}
 		
+		/// <summary>
+		/// Creates a shallow clone of this entity.
+		/// Collections (e.g. a type's member list) will be cloned as well, but the elements
+		/// of said list will not be.
+		/// If this instance is frozen, the clone will be unfrozen.
+		/// </summary>
+		public virtual object Clone()
+		{
+			var copy = (AbstractUnresolvedEntity)MemberwiseClone();
+			copy.flags[FlagFrozen] = false;
+			if (attributes != null)
+				copy.attributes = new List<IUnresolvedAttribute>(attributes);
+			if (rareFields != null)
+				copy.rareFields = (RareFields)rareFields.Clone();
+			return copy;
+		}
+		
 		[Serializable]
 		internal class RareFields
 		{
 			internal DomRegion region;
 			internal DomRegion bodyRegion;
-			internal IParsedFile parsedFile;
+			internal IUnresolvedFile unresolvedFile;
 			
 			protected internal virtual void FreezeInternal()
 			{
 			}
 			
-			public virtual void ApplyInterningProvider(IInterningProvider provider)
+			public virtual void ApplyInterningProvider(InterningProvider provider)
 			{
+			}
+			
+			public virtual object Clone()
+			{
+				return MemberwiseClone();
 			}
 		}
 		
@@ -117,11 +148,11 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 			FreezableHelper.ThrowIfFrozen(this);
 		}
 		
-		public EntityType EntityType {
-			get { return entityType; }
+		public SymbolKind SymbolKind {
+			get { return symbolKind; }
 			set {
 				ThrowIfFrozen();
-				entityType = value;
+				symbolKind = value;
 			}
 		}
 		
@@ -148,11 +179,11 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 			}
 		}
 		
-		public IParsedFile ParsedFile {
-			get { return rareFields != null ? rareFields.parsedFile : null; }
+		public IUnresolvedFile UnresolvedFile {
+			get { return rareFields != null ? rareFields.unresolvedFile : null; }
 			set {
 				if (value != null || rareFields != null)
-					WriteRareFields().parsedFile = value;
+					WriteRareFields().unresolvedFile = value;
 			}
 		}
 		

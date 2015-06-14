@@ -51,10 +51,6 @@ namespace ICSharpCode.NRefactory.CSharp.Completion
 		#region Input properties
 		public CSharpTypeResolveContext ctx { get; private set; }
 
-		public CompilationUnit Unit { get; private set; }
-
-		public CSharpParsedFile CSharpParsedFile { get; private set; }
-
 		public IProjectContent ProjectContent { get; private set; }
 		
 		ICompilation compilation;
@@ -66,56 +62,62 @@ namespace ICSharpCode.NRefactory.CSharp.Completion
 				return compilation;
 			}
 		}
+
+		Version languageVersion = new Version (5, 0);
+		public Version LanguageVersion {
+			get {
+				return languageVersion;
+			}
+			set {
+				languageVersion = value;
+			}
+		}
 		#endregion
 		
-		protected CSharpCompletionEngineBase (IProjectContent content, CSharpTypeResolveContext ctx, CompilationUnit unit, CSharpParsedFile parsedFile)
+		protected CSharpCompletionEngineBase(IProjectContent content, ICompletionContextProvider completionContextProvider, CSharpTypeResolveContext ctx)
 		{
 			if (content == null)
-				throw new ArgumentNullException ("content");
+				throw new ArgumentNullException("content");
 			if (ctx == null)
-				throw new ArgumentNullException ("ctx");
-			if (unit == null)
-				throw new ArgumentNullException ("unit");
-			if (parsedFile == null)
-				throw new ArgumentNullException ("parsedFile");
+				throw new ArgumentNullException("ctx");
+			if (completionContextProvider == null)
+				throw new ArgumentNullException("completionContextProvider");
 			
 			this.ProjectContent = content;
+			this.CompletionContextProvider = completionContextProvider;
 			this.ctx = ctx;
-			this.Unit = unit;
-			this.CSharpParsedFile = parsedFile;
 		}
 		
 		
-		public IMemberProvider MemberProvider {
+		public ICompletionContextProvider CompletionContextProvider {
 			get;
-			set;
+			private set;
 		}
 		
-		protected void SetOffset (int offset)
+		public void SetOffset (int offset)
 		{
 			Reset ();
 			
 			this.offset = offset;
 			this.location = document.GetLocation (offset);
-			var provider = MemberProvider ?? new DefaultMemberProvider (this);
-			provider.GetCurrentMembers (offset, out currentType, out currentMember);
+			CompletionContextProvider.GetCurrentMembers (offset, out currentType, out currentMember);
 		}
 
-		protected bool GetParameterCompletionCommandOffset(out int cpos)
+		public bool GetParameterCompletionCommandOffset (out int cpos)
 		{
 			// Start calculating the parameter offset from the beginning of the
 			// current member, instead of the beginning of the file. 
 			cpos = offset - 1;
 			var mem = currentMember;
-			if (mem == null || (mem is IType)) {
+			if (mem == null || (mem is IType) || IsInsideCommentStringOrDirective ()) {
 				return false;
 			}
-			int startPos = document.GetOffset(mem.Region.BeginLine, mem.Region.BeginColumn);
+			int startPos = document.GetOffset (mem.Region.BeginLine, mem.Region.BeginColumn);
 			int parenDepth = 0;
 			int chevronDepth = 0;
-			Stack<int> indexStack = new Stack<int>();
+			Stack<int> indexStack = new Stack<int> ();
 			while (cpos > startPos) {
-				char c = document.GetCharAt(cpos);
+				char c = document.GetCharAt (cpos);
 				if (c == ')') {
 					parenDepth++;
 				}
@@ -124,14 +126,14 @@ namespace ICSharpCode.NRefactory.CSharp.Completion
 				}
 				if (c == '}') {
 					if (indexStack.Count > 0) {
-						parenDepth = indexStack.Pop();
+						parenDepth = indexStack.Pop ();
 					} else {
 						parenDepth = 0;
 					}
 					chevronDepth = 0;
 				}
 				if (indexStack.Count == 0 && (parenDepth == 0 && c == '(' || chevronDepth == 0 && c == '<')) {
-					int p = GetCurrentParameterIndex (cpos + 1, startPos);
+					int p = GetCurrentParameterIndex (startPos, cpos + 1);
 					if (p != -1) {
 						cpos++;
 						return true;
@@ -154,94 +156,170 @@ namespace ICSharpCode.NRefactory.CSharp.Completion
 			return false;
 		}
 		
-		protected int GetCurrentParameterIndex (int offset, int memberStart)
+		public int GetCurrentParameterIndex(int triggerOffset, int endOffset)
 		{
-			int cursor = this.offset;
-			int i = offset;
-			
-			if (i > cursor) {
+			List<string> list;
+			return  GetCurrentParameterIndex (triggerOffset, endOffset, out list);
+		}
+
+		public int GetCurrentParameterIndex (int triggerOffset, int endOffset, out List<string> usedNamedParameters)
+		{
+			usedNamedParameters =new List<string> ();
+			var parameter = new Stack<int> ();
+			var bracketStack = new Stack<Stack<int>> ();
+			bool inSingleComment = false, inString = false, inVerbatimString = false, inChar = false, inMultiLineComment = false;
+			var word = new StringBuilder ();
+			bool foundCharAfterOpenBracket = false;
+			for (int i = triggerOffset; i < endOffset; i++) {
+				char ch = document.GetCharAt (i);
+				char nextCh = i + 1 < document.TextLength ? document.GetCharAt (i + 1) : '\0';
+				if (ch == ':') {
+					usedNamedParameters.Add (word.ToString ());
+					word.Length = 0;
+				} else if (char.IsLetterOrDigit (ch) || ch =='_') {
+					word.Append (ch);
+				} else if (char.IsWhiteSpace (ch)) {
+
+				} else {
+					word.Length = 0;
+				}
+				if (!char.IsWhiteSpace(ch) && parameter.Count > 0)
+					foundCharAfterOpenBracket = true;
+
+				switch (ch) {
+					case '{':
+						if (inString || inChar || inVerbatimString || inSingleComment || inMultiLineComment) {
+							break;
+						}
+						bracketStack.Push (parameter);
+						parameter = new Stack<int> ();
+						break;
+					case '[':
+					case '(':
+						if (inString || inChar || inVerbatimString || inSingleComment || inMultiLineComment) {
+							break;
+						}
+						parameter.Push (0);
+						break;
+					case '}':
+						if (inString || inChar || inVerbatimString || inSingleComment || inMultiLineComment) {
+							break;
+						}
+						if (bracketStack.Count > 0) {
+							parameter = bracketStack.Pop ();
+						} else {
+							return -1;
+						}
+						break;
+					case ']':
+					case ')':
+						if (inString || inChar || inVerbatimString || inSingleComment || inMultiLineComment) {
+							break;
+						}
+						if (parameter.Count > 0) {
+							parameter.Pop ();
+						} else {
+							return -1;
+						}
+						break;
+					case '<':
+						if (inString || inChar || inVerbatimString || inSingleComment || inMultiLineComment) {
+							break;
+						}
+						parameter.Push (0);
+						break;
+					case '=':
+						if (nextCh == '>') {
+							i++;
+							continue;
+						}
+						break;
+					case '>':
+						if (inString || inChar || inVerbatimString || inSingleComment || inMultiLineComment) {
+							break;
+						}
+						if (parameter.Count > 0) {
+							parameter.Pop ();
+						}
+						break;
+					case ',':
+						if (inString || inChar || inVerbatimString || inSingleComment || inMultiLineComment) {
+							break;
+						}
+						if (parameter.Count > 0) {
+							parameter.Push (parameter.Pop () + 1);
+						}
+						break;
+					case '/':
+						if (inString || inChar || inVerbatimString) {
+							break;
+						}
+						if (nextCh == '/') {
+							i++;
+							inSingleComment = true;
+						}
+						if (nextCh == '*') {
+							inMultiLineComment = true;
+						}
+						break;
+					case '*':
+						if (inString || inChar || inVerbatimString || inSingleComment) {
+							break;
+						}
+						if (nextCh == '/') {
+							i++;
+							inMultiLineComment = false;
+						}
+						break;
+					case '@':
+						if (inString || inChar || inVerbatimString || inSingleComment || inMultiLineComment) {
+							break;
+						}
+						if (nextCh == '"') {
+							i++;
+							inVerbatimString = true;
+						}
+						break;
+					case '\\':
+						if (inString || inChar) {
+							i++;
+						}
+						break;
+					case '"':
+						if (inSingleComment || inMultiLineComment || inChar) {
+							break;
+						}
+						if (inVerbatimString) {
+							if (nextCh == '"') {
+								i++;
+								break;
+							}
+							inVerbatimString = false;
+							break;
+						}
+						inString = !inString;
+						break;
+					case '\'':
+						if (inSingleComment || inMultiLineComment || inString || inVerbatimString) {
+							break;
+						}
+						inChar = !inChar;
+						break;
+					default:
+						if (NewLine.IsNewLine(ch)) {
+							inSingleComment = false;
+							inString = false;
+							inChar = false;
+						}
+						break;
+				}
+			}
+			if (parameter.Count != 1 || bracketStack.Count > 0) {
 				return -1;
 			}
-			if (i == cursor) { 
-				return 1;
-			}
-			// parameters are 1 based
-			int index = memberStart + 1;
-			int parentheses = 0;
-			int bracket = 0;
-			bool insideQuote = false, insideString = false, insideSingleLineComment = false, insideMultiLineComment = false;
-			Stack<int> indexStack = new Stack<int> ();
-			do {
-				char c = document.GetCharAt (i - 1);
-				switch (c) {
-				case '\\':
-					if (insideString || insideQuote) {
-						i++;
-					}
-					break;
-				case '\'':
-					if (!insideString && !insideSingleLineComment && !insideMultiLineComment) {
-						insideQuote = !insideQuote;
-					}
-					break;
-				case '"':
-					if (!insideQuote && !insideSingleLineComment && !insideMultiLineComment) {
-						insideString = !insideString;
-					}
-					break;
-				case '/':
-					if (!insideQuote && !insideString && !insideMultiLineComment) {
-						if (document.GetCharAt (i) == '/') {
-							insideSingleLineComment = true;
-						}
-						if (document.GetCharAt (i) == '*') {
-							insideMultiLineComment = true;
-						}
-					}
-					break;
-				case '*':
-					if (insideMultiLineComment && document.GetCharAt (i) == '/') {
-						insideMultiLineComment = false;
-					}
-					break;
-				case '\n':
-				case '\r':
-					insideSingleLineComment = false;
-					break;
-				case '{':
-					if (!insideQuote && !insideString && !insideSingleLineComment && !insideMultiLineComment) {
-						bracket++;
-						indexStack.Push (index);
-					}
-					break;
-				case '}':
-					if (!insideQuote && !insideString && !insideSingleLineComment && !insideMultiLineComment) {
-						bracket--;
-						if (indexStack.Count > 0)
-							index = indexStack.Pop ();
-					}
-					break;
-				case '(':
-					if (!insideQuote && !insideString && !insideSingleLineComment && !insideMultiLineComment) {
-						parentheses++;
-					}
-					break;
-				case ')':
-					if (!insideQuote && !insideString && !insideSingleLineComment && !insideMultiLineComment) {
-						parentheses--;
-					}
-					break;
-				case ',':
-					if (!insideQuote && !insideString && !insideSingleLineComment && !insideMultiLineComment && parentheses == 1 && bracket == 0) {
-						index++;
-					}
-					break;
-
-				}
-				i++;
-			} while (i <= cursor && parentheses >= 0);
-			Console.WriteLine (indexStack.Count >= 0 || parentheses != 1 || bracket > 0 ? -1 : index);
-			return indexStack.Count >= 0 || parentheses != 1 || bracket > 0 ? -1 : index;
+			if (!foundCharAfterOpenBracket)
+				return 0;
+			return parameter.Pop() + 1;
 		}
 
 		#region Context helper methods
@@ -249,12 +327,12 @@ namespace ICSharpCode.NRefactory.CSharp.Completion
 		{
 			readonly string text;
 
-			public bool IsFistNonWs = true;
-			public bool IsInSingleComment = false;
-			public bool IsInString = false;
-			public bool IsInVerbatimString = false;
-			public bool IsInChar = false;
-			public bool IsInMultiLineComment = false;
+			public bool IsFistNonWs               = true;
+			public bool IsInSingleComment         = false;
+			public bool IsInString                = false;
+			public bool IsInVerbatimString        = false;
+			public bool IsInChar                  = false;
+			public bool IsInMultiLineComment      = false;
 			public bool IsInPreprocessorDirective = false;
 
 			public MiniLexer(string text)
@@ -262,12 +340,27 @@ namespace ICSharpCode.NRefactory.CSharp.Completion
 				this.text = text;
 			}
 
-			public void Parse(Action<char> act = null)
+			/// <summary>
+			/// Parsing all text and calling act delegate on almost every character.
+			/// Skipping begining of comments, begining of verbatim strings and escaped characters.
+			/// </summary>
+			/// <param name="act">Return true to abort parsing. Integer argument represent offset in text.</param>
+			/// <returns>True if aborted.</returns>
+			public bool Parse(Func<char, int, bool> act = null)
 			{
-				Parse(0, text.Length, act);
+				return Parse(0, text.Length, act);
 			}
 
-			public void Parse(int start, int length, Action<char> act = null)
+
+			/// <summary>
+			/// Parsing text from start to start+length and calling act delegate on almost every character.
+			/// Skipping begining of comments, begining of verbatim strings and escaped characters.
+			/// </summary>
+			/// <param name="start">Start offset.</param>
+			/// <param name="length">Lenght to parse.</param>
+			/// <param name="act">Return true to abort parsing. Integer argument represent offset in text.</param>
+			/// <returns>True if aborted.</returns>
+			public bool Parse(int start, int length, Func<char, int, bool> act = null)
 			{
 				for (int i = start; i < length; i++) {
 					char ch = text [i];
@@ -276,16 +369,19 @@ namespace ICSharpCode.NRefactory.CSharp.Completion
 						case '#':
 							if (IsFistNonWs)
 								IsInPreprocessorDirective = true;
-							break;
+							break; 
 						case '/':
-							if (IsInString || IsInChar || IsInVerbatimString)
+							if (IsInString || IsInChar || IsInVerbatimString || IsInSingleComment || IsInMultiLineComment)
 								break;
 							if (nextCh == '/') {
 								i++;
 								IsInSingleComment = true;
+								IsInPreprocessorDirective = false;
 							}
-							if (nextCh == '*')
+							if (nextCh == '*' && !IsInPreprocessorDirective) {
 								IsInMultiLineComment = true;
+								i++;
+							}
 							break;
 						case '*':
 							if (IsInString || IsInChar || IsInVerbatimString || IsInSingleComment)
@@ -309,6 +405,7 @@ namespace ICSharpCode.NRefactory.CSharp.Completion
 							IsInString = false;
 							IsInChar = false;
 							IsFistNonWs = true;
+							IsInPreprocessorDirective = false;
 							break;
 						case '\\':
 							if (IsInString || IsInChar)
@@ -334,11 +431,28 @@ namespace ICSharpCode.NRefactory.CSharp.Completion
 							break;
 					}
 					if (act != null)
-						act(ch);
+					if (act (ch, i))
+						return true;
 					IsFistNonWs &= ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
 				}
+				return false;
 			}
 		}
+
+		
+		protected bool IsInsideCommentStringOrDirective(int offset)
+		{
+			var lexer = new MiniLexer(document.Text);
+			lexer.Parse(0, offset);
+			return
+				lexer.IsInSingleComment || 
+				lexer.IsInString ||
+				lexer.IsInVerbatimString ||
+				lexer.IsInChar ||
+				lexer.IsInMultiLineComment || 
+				lexer.IsInPreprocessorDirective;
+		}
+
 
 		protected bool IsInsideCommentStringOrDirective()
 		{
@@ -347,11 +461,11 @@ namespace ICSharpCode.NRefactory.CSharp.Completion
 			lexer.Parse();
 			return
 				lexer.IsInSingleComment || 
-				lexer.IsInString ||
-				lexer.IsInVerbatimString ||
-				lexer.IsInChar ||
-				lexer.IsInMultiLineComment || 
-				lexer.IsInPreprocessorDirective;
+					lexer.IsInString ||
+					lexer.IsInVerbatimString ||
+					lexer.IsInChar ||
+					lexer.IsInMultiLineComment || 
+					lexer.IsInPreprocessorDirective;
 		}
 
 		protected bool IsInsideDocComment ()
@@ -436,13 +550,13 @@ namespace ICSharpCode.NRefactory.CSharp.Completion
 			
 			state.CurrentMember = currentMember;
 			state.CurrentTypeDefinition = currentType;
-			state.CurrentUsingScope = CSharpParsedFile.GetUsingScope (location);
+			state.CurrentUsingScope = CSharpUnresolvedFile.GetUsingScope (location);
 			if (state.CurrentMember != null) {
 				var node = Unit.GetNodeAt (location);
 				if (node == null)
 					return state;
 				var navigator = new NodeListResolveVisitorNavigator (new[] { node });
-				var visitor = new ResolveVisitor (state, CSharpParsedFile, navigator);
+				var visitor = new ResolveVisitor (state, CSharpUnresolvedFile, navigator);
 				Unit.AcceptVisitor (visitor, null);
 				try {
 					var newState = visitor.GetResolverStateBefore (node);
@@ -508,12 +622,6 @@ namespace ICSharpCode.NRefactory.CSharp.Completion
 						inVerbatimString = true;
 					}
 					break;
-				case '\n':
-				case '\r':
-					inSingleComment = false;
-					inString = false;
-					inChar = false;
-					break;
 				case '\\':
 					if (inString || inChar)
 						i++;
@@ -537,15 +645,21 @@ namespace ICSharpCode.NRefactory.CSharp.Completion
 					inChar = !inChar;
 					break;
 				default :
+					if (NewLine.IsNewLine(ch)) {
+						inSingleComment = false;
+						inString = false;
+						inChar = false;
+					}
 					break;
 				}
 			}
 			return bracketStack;
 		}
 		
-		public static void AppendMissingClosingBrackets (StringBuilder wrapper, string memberText, bool appendSemicolon)
+		public static void AppendMissingClosingBrackets (StringBuilder wrapper, bool appendSemicolon)
 		{
-			var bracketStack = GetBracketStack (memberText);
+			var memberText = wrapper.ToString();
+			var bracketStack = GetBracketStack(memberText);
 			bool didAppendSemicolon = !appendSemicolon;
 			//char lastBracket = '\0';
 			while (bracketStack.Count > 0) {
@@ -580,7 +694,7 @@ namespace ICSharpCode.NRefactory.CSharp.Completion
 					while (o >= "try".Length) {
 						char ch = memberText [o];
 						if (!char.IsWhiteSpace (ch)) {
-							if (ch == 'y' && memberText [o - 1] == 'r' && memberText [o - 2] == 't') {
+								if (ch == 'y' && memberText [o - 1] == 'r' && memberText [o - 2] == 't' && (o - 3 < 0 || !char.IsLetterOrDigit(memberText [o - 3]))) {
 								wrapper.Append ("} catch {}");
 								didAppendCatch = true;
 							}
@@ -597,17 +711,8 @@ namespace ICSharpCode.NRefactory.CSharp.Completion
 				wrapper.Append (';');
 		}
 
-		protected CompilationUnit ParseStub(string continuation, bool appendSemicolon = true, string afterContinuation = null)
+		protected StringBuilder CreateWrapper(string continuation, bool appendSemicolon, string afterContinuation, string memberText, TextLocation memberLocation, ref int closingBrackets, ref int generatedLines)
 		{
-			var mt = GetMemberTextToCaret();
-			if (mt == null) {
-				return null;
-			}
-
-			string memberText = mt.Item1;
-			var memberLocation = mt.Item2;
-			int closingBrackets = 1;
-			int generatedLines = 0;
 			var wrapper = new StringBuilder();
 			bool wrapInClass = memberLocation != new TextLocation(1, 1);
 			if (wrapInClass) {
@@ -618,59 +723,52 @@ namespace ICSharpCode.NRefactory.CSharp.Completion
 			}
 			wrapper.Append(memberText);
 			wrapper.Append(continuation);
-			AppendMissingClosingBrackets(wrapper, memberText, appendSemicolon);
+			AppendMissingClosingBrackets(wrapper, appendSemicolon);
 			wrapper.Append(afterContinuation);
-			if (closingBrackets > 0) { 
+			if (closingBrackets > 0) {
 				wrapper.Append(new string('}', closingBrackets));
 			}
-			using (var stream = new System.IO.StringReader (wrapper.ToString ())) {
-				try {
-					var parser = new CSharpParser ();
-					var result = parser.Parse(stream, "stub.cs", memberLocation.Line - 1 - generatedLines);
-					return result;
-				} catch (Exception) {
-					Console.WriteLine("------");
-					Console.WriteLine(wrapper);
-					throw;
-				}
-			}
+			return wrapper;
 		}
-		
-		string cachedText = null;
+
+		protected SyntaxTree ParseStub(string continuation, bool appendSemicolon = true, string afterContinuation = null)
+		{
+			var mt = GetMemberTextToCaret();
+			if (mt == null) {
+				return null;
+			}
+
+			string memberText = mt.Item1;
+			var memberLocation = mt.Item2;
+			int closingBrackets = 1;
+			int generatedLines = 0;
+			var wrapper = CreateWrapper(continuation, appendSemicolon, afterContinuation, memberText, memberLocation, ref closingBrackets, ref generatedLines);
+			var parser = new CSharpParser ();
+			foreach (var sym in CompletionContextProvider.ConditionalSymbols)
+				parser.CompilerSettings.ConditionalSymbols.Add (sym);
+			parser.InitialLocation = new TextLocation(memberLocation.Line - generatedLines, 1);
+			var result = parser.Parse(wrapper.ToString ());
+			return result;
+		}
 		
 		protected virtual void Reset ()
 		{
-			cachedText = null;
+			memberText = null;
 		}
-		
+
+		Tuple<string, TextLocation> memberText;
 		protected Tuple<string, TextLocation> GetMemberTextToCaret()
 		{
-			int startOffset;
-			if (currentMember != null && currentType != null && currentType.Kind != TypeKind.Enum) {
-				startOffset = document.GetOffset(currentMember.Region.Begin);
-			} else if (currentType != null) {
-				startOffset = document.GetOffset(currentType.Region.Begin);
-			} else {
-				startOffset = 0;
-			}
-			while (startOffset > 0) {
-				char ch = document.GetCharAt(startOffset - 1);
-				if (ch != ' ' && ch != '\t') {
-					break;
-				}
-				--startOffset;
-			}
-			if (cachedText == null)
-				cachedText = document.GetText (startOffset, offset - startOffset);
-			
-			return Tuple.Create (cachedText, document.GetLocation (startOffset));
+			if (memberText == null)
+				memberText = CompletionContextProvider.GetMemberTextToCaret(offset, currentType, currentMember);
+			return memberText;
 		}
-		
+
 		protected ExpressionResult GetInvocationBeforeCursor(bool afterBracket)
 		{
-			CompilationUnit baseUnit;
+			SyntaxTree baseUnit;
 			baseUnit = ParseStub("a", false);
-			
+
 			var section = baseUnit.GetNodeAt<AttributeSection>(location.Line, location.Column - 2);
 			var attr = section != null ? section.Attributes.LastOrDefault() : null;
 			if (attr != null) {
@@ -723,10 +821,10 @@ namespace ICSharpCode.NRefactory.CSharp.Completion
 		public class ExpressionResult
 		{
 			public AstNode Node { get; private set; }
-			public CompilationUnit Unit  { get; private set; }
+			public SyntaxTree Unit  { get; private set; }
 			
 			
-			public ExpressionResult (AstNode item2, CompilationUnit item3)
+			public ExpressionResult (AstNode item2, SyntaxTree item3)
 			{
 				this.Node = item2;
 				this.Unit = item3;
@@ -738,12 +836,26 @@ namespace ICSharpCode.NRefactory.CSharp.Completion
 			}
 		}
 		
-		protected Tuple<ResolveResult, CSharpResolver> ResolveExpression (ExpressionResult tuple)
+		protected ExpressionResolveResult ResolveExpression (ExpressionResult tuple)
 		{
-			return ResolveExpression (tuple.Node, tuple.Unit);
+			return ResolveExpression (tuple.Node);
 		}
 
-		protected Tuple<ResolveResult, CSharpResolver> ResolveExpression(AstNode expr, CompilationUnit unit)
+		protected class ExpressionResolveResult
+		{
+			public ResolveResult Result { get; set; }
+			public CSharpResolver Resolver { get; set; }
+			public CSharpAstResolver AstResolver { get; set; }
+
+			public ExpressionResolveResult(ResolveResult item1, CSharpResolver item2, CSharpAstResolver item3)
+			{
+				this.Result = item1;
+				this.Resolver = item2;
+				this.AstResolver = item3;
+			}
+		}
+
+		protected ExpressionResolveResult ResolveExpression(AstNode expr)
 		{
 			if (expr == null) {
 				return null;
@@ -757,15 +869,33 @@ namespace ICSharpCode.NRefactory.CSharp.Completion
 				resolveNode = expr;
 			}
 			try {
-				var ctx = CSharpParsedFile.GetResolver(Compilation, location);
-				var root = expr.AncestorsAndSelf.FirstOrDefault(n => n is EntityDeclaration || n is CompilationUnit);
+				var root = expr.AncestorsAndSelf.FirstOrDefault(n => n is EntityDeclaration || n is SyntaxTree);
 				if (root == null) {
 					return null;
 				}
-				var csResolver = new CSharpAstResolver (ctx, root, CSharpParsedFile);
+				var curState = GetState();
+				// current member needs to be in the setter because of the 'value' parameter
+				if (root is Accessor) {
+					var prop = curState.CurrentMember as IProperty;
+					if (prop != null && prop.CanSet && (root.Role == IndexerDeclaration.SetterRole || root.Role == PropertyDeclaration.SetterRole))
+					    curState = curState.WithCurrentMember(prop.Setter);
+				}
+
+				// Rood should be the 'body' - otherwise the state -> current member isn't correct.
+				var body = root.Children.FirstOrDefault(r => r.Role == Roles.Body);
+				if (body != null && body.Contains(expr.StartLocation))
+					root = body;
+
+				var csResolver = CompletionContextProvider.GetResolver (curState, root);
 				var result = csResolver.Resolve(resolveNode);
 				var state = csResolver.GetResolverStateBefore(resolveNode);
-				return Tuple.Create(result, state);
+				if (state.CurrentMember == null)
+					state = state.WithCurrentMember(curState.CurrentMember);
+				if (state.CurrentTypeDefinition == null)
+					state = state.WithCurrentTypeDefinition(curState.CurrentTypeDefinition);
+				if (state.CurrentUsingScope == null)
+					state = state.WithCurrentUsingScope(curState.CurrentUsingScope);
+				return new ExpressionResolveResult(result, state, csResolver);
 			} catch (Exception e) {
 				Console.WriteLine(e);
 				return null;
@@ -773,128 +903,5 @@ namespace ICSharpCode.NRefactory.CSharp.Completion
 		}
 		
 		#endregion
-		
-		class DefaultMemberProvider : IMemberProvider
-	{
-		CSharpCompletionEngineBase engine;
-		
-		
-		public DefaultMemberProvider (CSharpCompletionEngineBase engine)
-		{
-			this.engine = engine;
-		}
-		
-		public void GetCurrentMembers (int offset, out IUnresolvedTypeDefinition currentType, out IUnresolvedMember currentMember)
-		{
-			//var document = engine.document;
-			var location = engine.location;
-			
-			currentType = null;
-			
-			foreach (var type in engine.CSharpParsedFile.TopLevelTypeDefinitions) {
-				if (type.Region.Begin < location)
-					currentType = type;
-			}
-			currentType = FindInnerType (currentType, location);
-			
-			// location is beyond last reported end region, now we need to check, if the end region changed
-			if (currentType != null && currentType.Region.End < location) {
-				if (!IsInsideType (currentType, location))
-					currentType = null;
-			}
-			currentMember = null;
-			if (currentType != null) {
-				foreach (var member in currentType.Members) {
-					if (member.Region.Begin < location && (currentMember == null || currentMember.Region.Begin < member.Region.Begin))
-						currentMember = member;
-				}
-			}
-			
-			// location is beyond last reported end region, now we need to check, if the end region changed
-			// NOTE: Enums are a special case, there the "last" field needs to be treated as current member
-			if (currentMember != null && currentMember.Region.End < location && currentType.Kind != TypeKind.Enum) {
-				if (!IsInsideType (currentMember, location))
-					currentMember = null;
-			}
-			var stack = GetBracketStack (engine.GetMemberTextToCaret ().Item1);
-			if (stack.Count == 0)
-				currentMember = null;
-		}
-
-		IUnresolvedTypeDefinition FindInnerType (IUnresolvedTypeDefinition parent, TextLocation location)
-		{
-			if (parent == null)
-				return null;
-			var currentType = parent;
-			foreach (var type in parent.NestedTypes) {
-				if (type.Region.Begin < location  && location < type.Region.End)
-					currentType = FindInnerType (type, location);
-			}
-			
-			return currentType;
-		}
-		
-		bool IsInsideType (IUnresolvedEntity currentType, TextLocation location)
-		{
-			var document = engine.document;
-			
-			int startOffset = document.GetOffset (currentType.Region.Begin);
-			int endOffset = document.GetOffset (location);
-			//bool foundEndBracket = false;
-		
-			var bracketStack = new Stack<char> ();
-		
-			bool isInString = false, isInChar = false;
-			bool isInLineComment = false, isInBlockComment = false;
-			
-			for (int i = startOffset; i < endOffset; i++) {
-				char ch = document.GetCharAt (i);
-				switch (ch) {
-					case '(':
-					case '[':
-					case '{':
-						if (!isInString && !isInChar && !isInLineComment && !isInBlockComment)
-							bracketStack.Push (ch);
-						break;
-					case ')':
-					case ']':
-					case '}':
-						if (!isInString && !isInChar && !isInLineComment && !isInBlockComment)
-						if (bracketStack.Count > 0)
-							bracketStack.Pop ();
-						break;
-					case '\r':
-					case '\n':
-						isInLineComment = false;
-						break;
-					case '/':
-						if (isInBlockComment) {
-							if (i > 0 && document.GetCharAt (i - 1) == '*') 
-								isInBlockComment = false;
-						} else if (!isInString && !isInChar && i + 1 < document.TextLength) {
-							char nextChar = document.GetCharAt (i + 1);
-							if (nextChar == '/')
-								isInLineComment = true;
-							if (!isInLineComment && nextChar == '*')
-								isInBlockComment = true;
-						}
-						break;
-					case '"':
-						if (!(isInChar || isInLineComment || isInBlockComment)) 
-							isInString = !isInString;
-						break;
-					case '\'':
-						if (!(isInString || isInLineComment || isInBlockComment)) 
-							isInChar = !isInChar;
-						break;
-					default :
-						break;
-					}
-				}
-			return bracketStack.Any (t => t == '{');
-		}		
-	}
-
-	
 	}
 }

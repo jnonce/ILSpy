@@ -34,8 +34,16 @@ namespace ICSharpCode.NRefactory.CSharp
 	public class MemberReferenceExpression : Expression
 	{
 		public Expression Target {
-			get { return GetChildByRole (Roles.TargetExpression); }
-			set { SetChildByRole(Roles.TargetExpression, value); }
+			get {
+				return GetChildByRole(Roles.TargetExpression);
+			}
+			set {
+				SetChildByRole(Roles.TargetExpression, value);
+			}
+		}
+
+		public CSharpTokenNode DotToken {
+			get { return GetChildByRole (Roles.Dot); }
 		}
 		
 		public string MemberName {
@@ -85,7 +93,7 @@ namespace ICSharpCode.NRefactory.CSharp
 		
 		public MemberReferenceExpression (Expression target, string memberName, params AstType[] arguments) : this (target, memberName, (IEnumerable<AstType>)arguments)
 		{
-		}	
+		}
 		
 		public override void AcceptVisitor (IAstVisitor visitor)
 		{

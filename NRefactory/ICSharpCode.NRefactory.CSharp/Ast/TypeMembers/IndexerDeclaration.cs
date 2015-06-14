@@ -24,6 +24,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+using System;
+using System.ComponentModel;
 using ICSharpCode.NRefactory.TypeSystem;
 
 namespace ICSharpCode.NRefactory.CSharp
@@ -34,8 +36,8 @@ namespace ICSharpCode.NRefactory.CSharp
 		public static readonly Role<Accessor> GetterRole = PropertyDeclaration.GetterRole;
 		public static readonly Role<Accessor> SetterRole = PropertyDeclaration.SetterRole;
 		
-		public override EntityType EntityType {
-			get { return EntityType.Indexer; }
+		public override SymbolKind SymbolKind {
+			get { return SymbolKind.Indexer; }
 		}
 		
 		/// <summary>
@@ -47,8 +49,23 @@ namespace ICSharpCode.NRefactory.CSharp
 			set { SetChildByRole (PrivateImplementationTypeRole, value); }
 		}
 		
+		public override string Name {
+			get { return "Item"; }
+			set { throw new NotSupportedException(); }
+		}
+		
+		[EditorBrowsable(EditorBrowsableState.Never)]
+		public override Identifier NameToken {
+			get { return Identifier.Null; }
+			set { throw new NotSupportedException(); }
+		}
+
 		public CSharpTokenNode LBracketToken {
 			get { return GetChildByRole (Roles.LBracket); }
+		}
+
+		public CSharpTokenNode ThisToken {
+			get { return GetChildByRole (ThisKeywordRole); }
 		}
 		
 		public AstNodeCollection<ParameterDeclaration> Parameters {
@@ -95,7 +112,7 @@ namespace ICSharpCode.NRefactory.CSharp
 		protected internal override bool DoMatch(AstNode other, PatternMatching.Match match)
 		{
 			IndexerDeclaration o = other as IndexerDeclaration;
-			return o != null && MatchString(this.Name, o.Name)
+			return o != null
 				&& this.MatchAttributesAndModifiers(o, match) && this.ReturnType.DoMatch(o.ReturnType, match)
 				&& this.PrivateImplementationType.DoMatch(o.PrivateImplementationType, match)
 				&& this.Parameters.DoMatch(o.Parameters, match)

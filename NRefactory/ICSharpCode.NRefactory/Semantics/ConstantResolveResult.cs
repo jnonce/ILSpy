@@ -1,4 +1,4 @@
-﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+﻿// Copyright (c) 2010-2013 AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -24,6 +24,11 @@ namespace ICSharpCode.NRefactory.Semantics
 {
 	/// <summary>
 	/// ResolveResult representing a compile-time constant.
+	/// Note: this class is mainly used for literals; there may be other ResolveResult classes
+	/// which are compile-time constants as well.
+	/// For example, a reference to a <c>const</c> field results in a <see cref="MemberResolveResult"/>.
+	/// 
+	/// Check <see cref="ResolveResult.IsCompileTimeConstant"/> to determine is a resolve result is a constant.
 	/// </summary>
 	public class ConstantResolveResult : ResolveResult
 	{

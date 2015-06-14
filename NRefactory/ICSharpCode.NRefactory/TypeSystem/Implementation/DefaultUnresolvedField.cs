@@ -1,4 +1,4 @@
-﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+﻿// Copyright (c) 2010-2013 AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -34,28 +34,22 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 			base.FreezeInternal();
 		}
 		
-		public override void ApplyInterningProvider(IInterningProvider provider)
-		{
-			base.ApplyInterningProvider(provider);
-			constantValue = provider.Intern(constantValue);
-		}
-		
 		public DefaultUnresolvedField()
 		{
-			this.EntityType = EntityType.Field;
+			this.SymbolKind = SymbolKind.Field;
 		}
 		
 		public DefaultUnresolvedField(IUnresolvedTypeDefinition declaringType, string name)
 		{
-			this.EntityType = EntityType.Field;
+			this.SymbolKind = SymbolKind.Field;
 			this.DeclaringTypeDefinition = declaringType;
 			this.Name = name;
 			if (declaringType != null)
-				this.ParsedFile = declaringType.ParsedFile;
+				this.UnresolvedFile = declaringType.UnresolvedFile;
 		}
 		
 		public bool IsConst {
-			get { return constantValue != null; }
+			get { return constantValue != null && !IsFixed; }
 		}
 		
 		public bool IsReadOnly {
@@ -73,6 +67,14 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 				flags[FlagFieldIsVolatile] = value;
 			}
 		}
+
+		public bool IsFixed {
+			get { return flags[FlagFieldIsFixedSize]; }
+			set {
+				ThrowIfFrozen();
+				flags[FlagFieldIsFixedSize] = value;
+			}
+		}
 		
 		public IConstantValue ConstantValue {
 			get { return constantValue; }
@@ -85,6 +87,11 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 		public override IMember CreateResolved(ITypeResolveContext context)
 		{
 			return new DefaultResolvedField(this, context);
+		}
+		
+		IField IUnresolvedField.Resolve(ITypeResolveContext context)
+		{
+			return (IField)Resolve(context);
 		}
 	}
 }

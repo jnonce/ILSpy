@@ -1,4 +1,4 @@
-﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+﻿// Copyright (c) 2010-2013 AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -18,7 +18,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics.Contracts;
 
 namespace ICSharpCode.NRefactory.TypeSystem
 {
@@ -40,37 +39,64 @@ namespace ICSharpCode.NRefactory.TypeSystem
 	/// and which are used only within a single type definition. Then a persistent file format could be organized so
 	/// that shared objects are loaded only once, yet non-shared objects get loaded lazily together with the class.
 	/// </remarks>
-	#if WITH_CONTRACTS
-	[ContractClass(typeof(IInterningProviderContract))]
-	#endif
-	public interface IInterningProvider
+	public abstract class InterningProvider
 	{
+		public static readonly InterningProvider Dummy = new DummyInterningProvider();
+		
 		/// <summary>
 		/// Interns the specified object.
-		/// The object must implement <see cref="ISupportsInterning"/>, or must be of one of the types
-		/// known to the interning provider to use value equality,
-		/// otherwise it will be returned without being interned.
+		/// 
+		/// If the object is freezable, it will be frozen.
 		/// </summary>
-		T Intern<T>(T obj) where T : class;
+		public abstract ISupportsInterning Intern(ISupportsInterning obj);
 		
-		IList<T> InternList<T>(IList<T> list) where T : class;
-	}
-	
-	#if WITH_CONTRACTS
-	[ContractClassFor(typeof(IInterningProvider))]
-	abstract class IInterningProviderContract : IInterningProvider
-	{
-		T IInterningProvider.Intern<T>(T obj)
+		/// <summary>
+		/// Interns the specified object.
+		/// 
+		/// If the object is freezable, it will be frozen.
+		/// </summary>
+		public T Intern<T>(T obj) where T : class, ISupportsInterning
 		{
-			Contract.Ensures((Contract.Result<T>() == null) == (obj == null));
-			return obj;
+			ISupportsInterning input = obj;
+			return (T)Intern(input);
 		}
 		
-		IList<T> IInterningProvider.InternList<T>(IList<T> list)
+		/// <summary>
+		/// Interns the specified string.
+		/// </summary>
+		public abstract string Intern(string text);
+		
+		/// <summary>
+		/// Inters a boxed value type.
+		/// </summary>
+		public abstract object InternValue(object obj);
+		
+		/// <summary>
+		/// Interns the given list. Uses reference equality to compare the list elements.
+		/// </summary>
+		public abstract IList<T> InternList<T>(IList<T> list) where T : class;
+		
+		sealed class DummyInterningProvider : InterningProvider
 		{
-			Contract.Ensures((Contract.Result<IList<T>>() == null) == (list == null));
-			return list;
+			public override ISupportsInterning Intern(ISupportsInterning obj)
+			{
+				return obj;
+			}
+			
+			public override string Intern(string text)
+			{
+				return text;
+			}
+			
+			public override object InternValue(object obj)
+			{
+				return obj;
+			}
+			
+			public override IList<T> InternList<T>(IList<T> list)
+			{
+				return list;
+			}
 		}
 	}
-	#endif
 }

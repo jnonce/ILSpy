@@ -1,4 +1,4 @@
-﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+﻿// Copyright (c) 2010-2013 AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -17,22 +17,18 @@
 // DEALINGS IN THE SOFTWARE.
 
 using System;
-using System.Diagnostics.Contracts;
 
 namespace ICSharpCode.NRefactory.TypeSystem
 {
 	/// <summary>
 	/// Represents a variable (name/type pair).
 	/// </summary>
-	#if WITH_CONTRACTS
-	[ContractClass(typeof(IVariableContract))]
-	#endif
-	public interface IVariable
+	public interface IVariable : ISymbol
 	{
 		/// <summary>
 		/// Gets the name of the variable.
 		/// </summary>
-		string Name { get; }
+		new string Name { get; }
 		
 		/// <summary>
 		/// Gets the declaration region of the variable.
@@ -55,36 +51,4 @@ namespace ICSharpCode.NRefactory.TypeSystem
 		/// </summary>
 		object ConstantValue { get; }
 	}
-	
-	#if WITH_CONTRACTS
-	[ContractClassFor(typeof(IVariable))]
-	abstract class IVariableContract : IVariable
-	{
-		string IVariable.Name {
-			get {
-				Contract.Ensures(Contract.Result<string>() != null);
-				return null;
-			}
-		}
-		
-		ITypeReference IVariable.Type {
-			get {
-				Contract.Ensures(Contract.Result<ITypeReference>() != null);
-				return null;
-			}
-		}
-		
-		bool IVariable.IsConst {
-			get {
-				IVariable @this = this;
-				Contract.Ensures(Contract.Result<bool>() == (@this.ConstantValue != null));
-				return false;
-			}
-		}
-		
-		object IVariable.ConstantValue {
-			get { return null; }
-		}
-	}
-	#endif
 }

@@ -25,7 +25,7 @@ namespace ICSharpCode.ILSpy.TreeNodes
 	/// <summary>
 	/// Node within assembly reference list.
 	/// </summary>
-	sealed class AssemblyReferenceTreeNode : ILSpyTreeNode
+	public sealed class AssemblyReferenceTreeNode : ILSpyTreeNode
 	{
 		readonly AssemblyNameReference r;
 		readonly AssemblyTreeNode parentAssembly;
@@ -40,9 +40,14 @@ namespace ICSharpCode.ILSpy.TreeNodes
 			this.parentAssembly = parentAssembly;
 			this.LazyLoading = true;
 		}
+
+		public AssemblyNameReference AssemblyNameReference
+		{
+			get { return r; }
+		}
 		
 		public override object Text {
-			get { return r.Name; }
+			get { return r.Name + r.MetadataToken.ToSuffixString(); }
 		}
 		
 		public override object Icon {
@@ -72,9 +77,9 @@ namespace ICSharpCode.ILSpy.TreeNodes
 			if (assemblyListNode != null) {
 				var refNode = assemblyListNode.FindAssemblyNode(parentAssembly.LoadedAssembly.LookupReferencedAssembly(r));
 				if (refNode != null) {
-					AssemblyDefinition asm = refNode.LoadedAssembly.AssemblyDefinition;
-					if (asm != null) {
-						foreach (var childRef in asm.MainModule.AssemblyReferences)
+					ModuleDefinition module = refNode.LoadedAssembly.ModuleDefinition;
+					if (module != null) {
+						foreach (var childRef in module.AssemblyReferences)
 							this.Children.Add(new AssemblyReferenceTreeNode(childRef, refNode));
 					}
 				}

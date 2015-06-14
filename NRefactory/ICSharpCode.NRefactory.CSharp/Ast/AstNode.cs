@@ -1,4 +1,4 @@
-// 
+﻿// 
 // AstNode.cs
 //
 // Author:
@@ -23,6 +23,7 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -30,10 +31,11 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using ICSharpCode.NRefactory.TypeSystem;
 
 namespace ICSharpCode.NRefactory.CSharp
 {
-	public abstract class AstNode : AbstractAnnotatable, ICSharpCode.NRefactory.TypeSystem.IFreezable, PatternMatching.INode
+	public abstract class AstNode : AbstractAnnotatable, ICSharpCode.NRefactory.TypeSystem.IFreezable, PatternMatching.INode, ICloneable
 	{
 		// the Root role must be available when creating the null nodes, so we can't put it in the Roles class
 		internal static readonly Role<AstNode> RootRole = new Role<AstNode> ("Root");
@@ -57,16 +59,17 @@ namespace ICSharpCode.NRefactory.CSharp
 			
 			public override void AcceptVisitor (IAstVisitor visitor)
 			{
+				visitor.VisitNullNode(this);
 			}
 			
 			public override T AcceptVisitor<T> (IAstVisitor<T> visitor)
 			{
-				return default (T);
+				return visitor.VisitNullNode(this);
 			}
 			
 			public override S AcceptVisitor<T, S> (IAstVisitor<T, S> visitor, T data)
 			{
-				return default (S);
+				return visitor.VisitNullNode(this, data);
 			}
 			
 			protected internal override bool DoMatch (AstNode other, PatternMatching.Match match)
@@ -191,16 +194,22 @@ namespace ICSharpCode.NRefactory.CSharp
 				return child.EndLocation;
 			}
 		}
+
+		public DomRegion Region {
+			get {
+				return new DomRegion (StartLocation, EndLocation);
+			}
+		}
 		
 		/// <summary>
 		/// Gets the region from StartLocation to EndLocation for this node.
-		/// The file name of the region is set based on the parent CompilationUnit's file name.
+		/// The file name of the region is set based on the parent SyntaxTree's file name.
 		/// If this node is not connected to a whole compilation, the file name will be null.
 		/// </summary>
 		public ICSharpCode.NRefactory.TypeSystem.DomRegion GetRegion()
 		{
-			var cu = (this.Ancestors.LastOrDefault() ?? this) as CompilationUnit;
-			string fileName = (cu != null ? cu.FileName : null);
+			var syntaxTree = (this.Ancestors.LastOrDefault() ?? this) as SyntaxTree;
+			string fileName = (syntaxTree != null ? syntaxTree.FileName : null);
 			return new ICSharpCode.NRefactory.TypeSystem.DomRegion(fileName, this.StartLocation, this.EndLocation);
 		}
 		
@@ -220,6 +229,10 @@ namespace ICSharpCode.NRefactory.CSharp
 				ThrowIfFrozen();
 				SetRole(value);
 			}
+		}
+		
+		internal uint RoleIndex {
+			get { return flags & roleIndexMask; }
 		}
 		
 		void SetRole(Role role)
@@ -285,20 +298,70 @@ namespace ICSharpCode.NRefactory.CSharp
 		}
 		
 		/// <summary>
-		/// Gets all descendants of this node (excluding this node itself).
+		/// Gets all descendants of this node (excluding this node itself) in pre-order.
 		/// </summary>
 		public IEnumerable<AstNode> Descendants {
-			get {
-				return Utils.TreeTraversal.PreOrder (this.Children, n => n.Children);
-			}
+			get { return GetDescendantsImpl(false); }
 		}
 		
 		/// <summary>
-		/// Gets all descendants of this node (including this node itself).
+		/// Gets all descendants of this node (including this node itself) in pre-order.
 		/// </summary>
 		public IEnumerable<AstNode> DescendantsAndSelf {
-			get {
-				return Utils.TreeTraversal.PreOrder (this, n => n.Children);
+			get { return GetDescendantsImpl(true); }
+		}
+
+		static bool IsInsideRegion(DomRegion region, AstNode pos)
+		{
+			if (region.IsEmpty)
+				return true;
+			var nodeRegion = pos.Region;
+			return region.IntersectsWith(nodeRegion) || region.OverlapsWith(nodeRegion);
+		}
+
+		public IEnumerable<AstNode> DescendantNodes (Func<AstNode, bool> descendIntoChildren = null)
+		{
+			return GetDescendantsImpl(false, new DomRegion (), descendIntoChildren);
+		}
+
+		public IEnumerable<AstNode> DescendantNodes (DomRegion region, Func<AstNode, bool> descendIntoChildren = null)
+		{
+			return GetDescendantsImpl(false, region, descendIntoChildren);
+		}
+
+		public IEnumerable<AstNode> DescendantNodesAndSelf (Func<AstNode, bool> descendIntoChildren = null)
+		{
+			return GetDescendantsImpl(true, new DomRegion (), descendIntoChildren);
+		}
+
+		public IEnumerable<AstNode> DescendantNodesAndSelf (DomRegion region, Func<AstNode, bool> descendIntoChildren = null)
+		{
+			return GetDescendantsImpl(true, region, descendIntoChildren);
+		}
+
+		IEnumerable<AstNode> GetDescendantsImpl(bool includeSelf, DomRegion region = new DomRegion (), Func<AstNode, bool> descendIntoChildren = null)
+		{
+			if (includeSelf) {
+				if (IsInsideRegion (region, this))
+					yield return this;
+				if (descendIntoChildren != null && !descendIntoChildren(this))
+					yield break;
+			}
+
+			Stack<AstNode> nextStack = new Stack<AstNode>();
+			nextStack.Push(null);
+			AstNode pos = firstChild;
+			while (pos != null) {
+				// Remember next before yielding pos.
+				// This allows removing/replacing nodes while iterating through the list.
+				if (pos.nextSibling != null)
+					nextStack.Push(pos.nextSibling);
+				if (IsInsideRegion(region, pos))
+					yield return pos;
+				if (pos.firstChild != null && (descendIntoChildren == null || descendIntoChildren(pos)))
+					pos = pos.firstChild;
+				else
+					pos = nextStack.Pop();
 			}
 		}
 		
@@ -322,7 +385,12 @@ namespace ICSharpCode.NRefactory.CSharp
 		{
 			return Ancestors.OfType<T>().FirstOrDefault();
 		}
-				
+
+		public AstNode GetParent(Func<AstNode, bool> pred)
+		{
+			return Ancestors.FirstOrDefault(pred);
+		}
+
 		public AstNodeCollection<T> GetChildrenByRole<T> (Role<T> role) where T : AstNode
 		{
 			return new AstNodeCollection<T> (this, role);
@@ -344,6 +412,8 @@ namespace ICSharpCode.NRefactory.CSharp
 			if (child == null || child.IsNull)
 				return;
 			ThrowIfFrozen();
+			if (child == this)
+				throw new ArgumentException ("Cannot add a node to itself as a child.", "child");
 			if (child.parent != null)
 				throw new ArgumentException ("Node is already used in another tree.", "child");
 			if (child.IsFrozen)
@@ -351,10 +421,24 @@ namespace ICSharpCode.NRefactory.CSharp
 			AddChildUnsafe (child, role);
 		}
 		
+		public void AddChildWithExistingRole (AstNode child)
+		{
+			if (child == null || child.IsNull)
+				return;
+			ThrowIfFrozen();
+			if (child == this)
+				throw new ArgumentException ("Cannot add a node to itself as a child.", "child");
+			if (child.parent != null)
+				throw new ArgumentException ("Node is already used in another tree.", "child");
+			if (child.IsFrozen)
+				throw new ArgumentException ("Cannot add a frozen node.", "child");
+			AddChildUnsafe (child, child.Role);
+		}
+		
 		/// <summary>
 		/// Adds a child without performing any safety checks.
 		/// </summary>
-		void AddChildUnsafe (AstNode child, Role role)
+		internal void AddChildUnsafe (AstNode child, Role role)
 		{
 			child.parent = this;
 			child.SetRole(role);
@@ -367,13 +451,6 @@ namespace ICSharpCode.NRefactory.CSharp
 			}
 		}
 
-		public void InsertChildsBefore<T>(AstNode nextSibling, Role<T> role, params T[] child) where T : AstNode
-		{
-			foreach (var cur in child) {
-				InsertChildBefore(nextSibling, cur, role);
-			}
-		}
-		
 		public void InsertChildBefore<T> (AstNode nextSibling, T child, Role<T> role) where T : AstNode
 		{
 			if (role == null)
@@ -397,7 +474,7 @@ namespace ICSharpCode.NRefactory.CSharp
 			InsertChildBeforeUnsafe (nextSibling, child, role);
 		}
 		
-		void InsertChildBeforeUnsafe (AstNode nextSibling, AstNode child, Role role)
+		internal void InsertChildBeforeUnsafe (AstNode nextSibling, AstNode child, Role role)
 		{
 			child.parent = this;
 			child.SetRole(role);
@@ -483,25 +560,24 @@ namespace ICSharpCode.NRefactory.CSharp
 			newNode.SetRole(this.Role);
 			newNode.prevSibling = prevSibling;
 			newNode.nextSibling = nextSibling;
-			if (parent != null) {
-				if (prevSibling != null) {
-					Debug.Assert (prevSibling.nextSibling == this);
-					prevSibling.nextSibling = newNode;
-				} else {
-					Debug.Assert (parent.firstChild == this);
-					parent.firstChild = newNode;
-				}
-				if (nextSibling != null) {
-					Debug.Assert (nextSibling.prevSibling == this);
-					nextSibling.prevSibling = newNode;
-				} else {
-					Debug.Assert (parent.lastChild == this);
-					parent.lastChild = newNode;
-				}
-				parent = null;
-				prevSibling = null;
-				nextSibling = null;
+
+			if (prevSibling != null) {
+				Debug.Assert (prevSibling.nextSibling == this);
+				prevSibling.nextSibling = newNode;
+			} else {
+				Debug.Assert (parent.firstChild == this);
+				parent.firstChild = newNode;
 			}
+			if (nextSibling != null) {
+				Debug.Assert (nextSibling.prevSibling == this);
+				nextSibling.prevSibling = newNode;
+			} else {
+				Debug.Assert (parent.lastChild == this);
+				parent.lastChild = newNode;
+			}
+			parent = null;
+			prevSibling = null;
+			nextSibling = null;
 		}
 		
 		public AstNode ReplaceWith (Func<AstNode, AstNode> replaceFunction)
@@ -559,6 +635,11 @@ namespace ICSharpCode.NRefactory.CSharp
 			return copy;
 		}
 		
+		object ICloneable.Clone()
+		{
+			return Clone();
+		}
+		
 		public abstract void AcceptVisitor (IAstVisitor visitor);
 		
 		public abstract T AcceptVisitor<T> (IAstVisitor<T> visitor);
@@ -605,6 +686,19 @@ namespace ICSharpCode.NRefactory.CSharp
 			return null;
 		}
 
+		/// <summary>
+		/// Gets the next node which fullfills a given predicate
+		/// </summary>
+		/// <returns>The next node.</returns>
+		/// <param name="pred">The predicate.</param>
+		public AstNode GetNextNode (Func<AstNode, bool> pred)
+		{
+			var next = GetNextNode();
+			while (next != null && !pred (next))
+				next = next.GetNextNode();
+			return next;
+		}
+
 		public AstNode GetPrevNode ()
 		{
 			if (PrevSibling != null)
@@ -612,6 +706,19 @@ namespace ICSharpCode.NRefactory.CSharp
 			if (Parent != null)
 				return Parent.GetPrevNode ();
 			return null;
+		}
+
+		/// <summary>
+		/// Gets the previous node which fullfills a given predicate
+		/// </summary>
+		/// <returns>The next node.</returns>
+		/// <param name="pred">The predicate.</param>
+		public AstNode GetPrevNode (Func<AstNode, bool> pred)
+		{
+			var prev = GetPrevNode();
+			while (prev != null && !pred (prev))
+				prev = prev.GetPrevNode();
+			return prev;
 		}
 		// filters all non c# nodes (comments, white spaces or pre processor directives)
 		public AstNode GetCSharpNodeBefore (AstNode node)
@@ -623,6 +730,32 @@ namespace ICSharpCode.NRefactory.CSharp
 				n = n.GetPrevNode ();
 			}
 			return null;
+		}
+
+		/// <summary>
+		/// Gets the next sibling which fullfills a given predicate
+		/// </summary>
+		/// <returns>The next node.</returns>
+		/// <param name="pred">The predicate.</param>
+		public AstNode GetNextSibling (Func<AstNode, bool> pred)
+		{
+			var next = NextSibling;
+			while (next != null && !pred (next))
+				next = next.NextSibling;
+			return next;
+		}
+
+		/// <summary>
+		/// Gets the next sibling which fullfills a given predicate
+		/// </summary>
+		/// <returns>The next node.</returns>
+		/// <param name="pred">The predicate.</param>
+		public AstNode GetPrevSibling (Func<AstNode, bool> pred)
+		{
+			var prev = PrevSibling;
+			while (prev != null && !pred (prev))
+				prev = prev.PrevSibling;
+			return prev;
 		}
 		
 		#region GetNodeAt
@@ -645,20 +778,18 @@ namespace ICSharpCode.NRefactory.CSharp
 		{
 			AstNode result = null;
 			AstNode node = this;
-			while (node.FirstChild != null) {
-				var child = node.FirstChild;
-				while (child != null) {
-					if (child.StartLocation <= location && location < child.EndLocation) {
-						if (pred == null || pred (child))
-							result = child;
-						node = child;
-						break;
-					}
-					child = child.NextSibling;
-				}
-				// found no better child node - therefore the parent is the right one.
-				if (child == null)
+			while (node.LastChild != null) {
+				var child = node.LastChild;
+				while (child != null && child.StartLocation > location)
+					child = child.prevSibling;
+				if (child != null && location < child.EndLocation) {
+					if (pred == null || pred (child))
+						result = child;
+					node = child;
+				} else {
+					// found no better child node - therefore the parent is the right one.
 					break;
+				}
 			}
 			return result;
 		}
@@ -682,20 +813,18 @@ namespace ICSharpCode.NRefactory.CSharp
 		{
 			T result = null;
 			AstNode node = this;
-			while (node.FirstChild != null) {
-				var child = node.FirstChild;
-				while (child != null) {
-					if (child.StartLocation <= location && location < child.EndLocation) {
-						if (child is T)
-							result = (T)child;
-						node = child;
-						break;
-					}
-					child = child.NextSibling;
-				}
-				// found no better child node - therefore the parent is the right one.
-				if (child == null)
+			while (node.LastChild != null) {
+				var child = node.LastChild;
+				while (child != null && child.StartLocation > location)
+					child = child.prevSibling;
+				if (child != null && location < child.EndLocation) {
+					if (child is T)
+						result = (T)child;
+					node = child;
+				} else {
+					// found no better child node - therefore the parent is the right one.
 					break;
+				}
 			}
 			return result;
 		}
@@ -722,20 +851,18 @@ namespace ICSharpCode.NRefactory.CSharp
 		{
 			AstNode result = null;
 			AstNode node = this;
-			while (node.FirstChild != null) {
-				var child = node.FirstChild;
-				while (child != null) {
-					if (child.StartLocation <= location && location <= child.EndLocation) {
-						if (pred == null || pred (child))
-							result = child;
-						node = child;
-						break;
-					}
-					child = child.NextSibling;
-				}
-				// found no better child node - therefore the parent is the right one.
-				if (child == null)
+			while (node.LastChild != null) {
+				var child = node.LastChild;
+				while (child != null && child.StartLocation > location)
+					child = child.prevSibling;
+				if (child != null && location <= child.EndLocation) {
+					if (pred == null || pred (child))
+						result = child;
+					node = child;
+				} else {
+					// found no better child node - therefore the parent is the right one.
 					break;
+				}
 			}
 			return result;
 		}
@@ -759,20 +886,18 @@ namespace ICSharpCode.NRefactory.CSharp
 		{
 			T result = null;
 			AstNode node = this;
-			while (node.FirstChild != null) {
-				var child = node.FirstChild;
-				while (child != null) {
-					if (child.StartLocation <= location && location < child.EndLocation) {
-						if (child is T)
-							result = (T)child;
-						node = child;
-						break;
-					}
-					child = child.NextSibling;
-				}
-				// found no better child node - therefore the parent is the right one.
-				if (child == null)
+			while (node.LastChild != null) {
+				var child = node.LastChild;
+				while (child != null && child.StartLocation > location)
+					child = child.prevSibling;
+				if (child != null && location <= child.EndLocation) {
+					if (child is T)
+						result = (T)child;
+					node = child;
+				} else {
+					// found no better child node - therefore the parent is the right one.
 					break;
+				}
 			}
 			return result;
 		}
@@ -791,11 +916,17 @@ namespace ICSharpCode.NRefactory.CSharp
 			return this;
 		}
 		
+		/// <summary>
+		/// Returns the root nodes of all subtrees that are fully contained in the specified region.
+		/// </summary>
 		public IEnumerable<AstNode> GetNodesBetween (int startLine, int startColumn, int endLine, int endColumn)
 		{
 			return GetNodesBetween (new TextLocation (startLine, startColumn), new TextLocation (endLine, endColumn));
 		}
 		
+		/// <summary>
+		/// Returns the root nodes of all subtrees that are fully contained between <paramref name="start"/> and <paramref name="end"/> (inclusive).
+		/// </summary>
 		public IEnumerable<AstNode> GetNodesBetween (TextLocation start, TextLocation end)
 		{
 			AstNode node = this;
@@ -804,11 +935,11 @@ namespace ICSharpCode.NRefactory.CSharp
 				if (start <= node.StartLocation && node.EndLocation <= end) {
 					// Remember next before yielding node.
 					// This allows iteration to continue when the caller removes/replaces the node.
-					next = node.NextSibling;
+					next = node.GetNextNode();
 					yield return node;
 				} else {
 					if (node.EndLocation <= start) {
-						next = node.NextSibling;
+						next = node.GetNextNode();
 					} else {
 						next = node.FirstChild;
 					}
@@ -819,14 +950,19 @@ namespace ICSharpCode.NRefactory.CSharp
 				node = next;
 			}
 		}
-		
+		[Obsolete("Use ToString(options).")]
+		public string GetText (CSharpFormattingOptions formattingOptions = null)
+		{
+			return ToString(formattingOptions);
+		}
+
 		/// <summary>
 		/// Gets the node as formatted C# output.
 		/// </summary>
 		/// <param name='formattingOptions'>
 		/// Formatting options.
 		/// </param>
-		public virtual string GetText (CSharpFormattingOptions formattingOptions = null)
+		public virtual string ToString (CSharpFormattingOptions formattingOptions)
 		{
 			if (IsNull)
 				return "";
@@ -834,7 +970,12 @@ namespace ICSharpCode.NRefactory.CSharp
 			AcceptVisitor (new CSharpOutputVisitor (w, formattingOptions ?? FormattingOptionsFactory.CreateMono ()));
 			return w.ToString ();
 		}
-		
+
+		public sealed override string ToString()
+		{
+			return ToString(null);
+		}
+
 		/// <summary>
 		/// Returns true, if the given coordinates (line, column) are in the node.
 		/// </summary>
@@ -890,7 +1031,7 @@ namespace ICSharpCode.NRefactory.CSharp
 		{
 			if (IsNull)
 				return "Null";
-			string text = GetText();
+			string text = ToString();
 			text = text.TrimEnd().Replace("\t", "").Replace(Environment.NewLine, " ");
 			if (text.Length > 100)
 				return text.Substring(0, 97) + "...";

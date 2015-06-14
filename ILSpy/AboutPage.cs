@@ -95,10 +95,8 @@ namespace ICSharpCode.ILSpy
 			output.AddVisualLineElementGenerator(new MyLinkElementGenerator("SharpDevelop", "http://www.icsharpcode.net/opensource/sd/"));
 			output.AddVisualLineElementGenerator(new MyLinkElementGenerator("MIT License", "resource:license.txt"));
 			output.AddVisualLineElementGenerator(new MyLinkElementGenerator("LGPL", "resource:LGPL.txt"));
+			output.AddVisualLineElementGenerator(new MyLinkElementGenerator("MS-PL", "resource:MS-PL.txt"));
 			textView.ShowText(output);
-			
-			//reset icon bar
-			textView.manager.Bookmarks.Clear();
 		}
 		
 		sealed class MyLinkElementGenerator : LinkElementGenerator
@@ -181,30 +179,32 @@ namespace ICSharpCode.ILSpy
 		static Task<AvailableVersionInfo> GetLatestVersionAsync()
 		{
 			var tcs = new TaskCompletionSource<AvailableVersionInfo>();
-			WebClient wc = new WebClient();
-			IWebProxy systemWebProxy = WebRequest.GetSystemWebProxy();
-			systemWebProxy.Credentials = CredentialCache.DefaultCredentials;
-			wc.Proxy = systemWebProxy;
-			wc.DownloadDataCompleted += delegate(object sender, DownloadDataCompletedEventArgs e) {
-				if (e.Error != null) {
-					tcs.SetException(e.Error);
-				} else {
-					try {
-						XDocument doc = XDocument.Load(new MemoryStream(e.Result));
-						var bands = doc.Root.Elements("band");
-						var currentBand = bands.FirstOrDefault(b => (string)b.Attribute("id") == band) ?? bands.First();
-						Version version = new Version((string)currentBand.Element("latestVersion"));
-						string url = (string)currentBand.Element("downloadUrl");
-						if (!(url.StartsWith("http://", StringComparison.Ordinal) || url.StartsWith("https://", StringComparison.Ordinal)))
-							url = null; // don't accept non-urls
-						latestAvailableVersion = new AvailableVersionInfo { Version = version, DownloadUrl = url };
-						tcs.SetResult(latestAvailableVersion);
-					} catch (Exception ex) {
-						tcs.SetException(ex);
+			new Action(() => {
+				WebClient wc = new WebClient();
+				IWebProxy systemWebProxy = WebRequest.GetSystemWebProxy();
+				systemWebProxy.Credentials = CredentialCache.DefaultCredentials;
+				wc.Proxy = systemWebProxy;
+				wc.DownloadDataCompleted += delegate(object sender, DownloadDataCompletedEventArgs e) {
+					if (e.Error != null) {
+						tcs.SetException(e.Error);
+					} else {
+						try {
+							XDocument doc = XDocument.Load(new MemoryStream(e.Result));
+							var bands = doc.Root.Elements("band");
+							var currentBand = bands.FirstOrDefault(b => (string)b.Attribute("id") == band) ?? bands.First();
+							Version version = new Version((string)currentBand.Element("latestVersion"));
+							string url = (string)currentBand.Element("downloadUrl");
+							if (!(url.StartsWith("http://", StringComparison.Ordinal) || url.StartsWith("https://", StringComparison.Ordinal)))
+								url = null; // don't accept non-urls
+							latestAvailableVersion = new AvailableVersionInfo { Version = version, DownloadUrl = url };
+							tcs.SetResult(latestAvailableVersion);
+						} catch (Exception ex) {
+							tcs.SetException(ex);
+						}
 					}
-				}
-			};
-			wc.DownloadDataAsync(UpdateUrl);
+				};
+				wc.DownloadDataAsync(UpdateUrl);
+			}).BeginInvoke(null, null);
 			return tcs.Task;
 		}
 		

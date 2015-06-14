@@ -1,4 +1,4 @@
-﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+﻿// Copyright (c) 2010-2013 AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -18,16 +18,14 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics.Contracts;
 using ICSharpCode.NRefactory.TypeSystem;
-using ICSharpCode.NRefactory.TypeSystem.Implementation;
 
 namespace ICSharpCode.NRefactory.TypeSystem
 {
 	/// <summary>
 	/// Method/field/property/event.
 	/// </summary>
-	public interface IUnresolvedMember : IUnresolvedEntity
+	public interface IUnresolvedMember : IUnresolvedEntity, IMemberReference
 	{
 		/// <summary>
 		/// Gets the return type of this member.
@@ -62,15 +60,48 @@ namespace ICSharpCode.NRefactory.TypeSystem
 		/// </summary>
 		bool IsOverridable { get; }
 		
-		IMember CreateResolved(ITypeResolveContext context);
-	}
-	
-	public interface IMemberReference
-	{
 		/// <summary>
 		/// Resolves the member.
 		/// </summary>
-		IMember Resolve(ITypeResolveContext context);
+		/// <param name="context">
+		/// Context for looking up the member. The context must specify the current assembly.
+		/// A <see cref="SimpleTypeResolveContext"/> that specifies the current assembly is sufficient.
+		/// </param>
+		/// <returns>
+		/// Returns the resolved member, or <c>null</c> if the member could not be found.
+		/// </returns>
+		new IMember Resolve(ITypeResolveContext context);
+		
+		/// <summary>
+		/// Creates the resolved member.
+		/// </summary>
+		/// <param name="context">
+		/// The language-specific context that includes the parent type definition.
+		/// <see cref="IUnresolvedTypeDefinition.CreateResolveContext"/>
+		/// </param>
+		IMember CreateResolved(ITypeResolveContext context);
+	}
+	
+	public interface IMemberReference : ISymbolReference
+	{
+		/// <summary>
+		/// Gets the declaring type reference for the member.
+		/// </summary>
+		ITypeReference DeclaringTypeReference { get; }
+		
+		/// <summary>
+		/// Resolves the member.
+		/// </summary>
+		/// <param name="context">
+		/// Context to use for resolving this member reference.
+		/// Which kind of context is required depends on the which kind of member reference this is;
+		/// please consult the documentation of the method that was used to create this member reference,
+		/// or that of the class implementing this method.
+		/// </param>
+		/// <returns>
+		/// Returns the resolved member, or <c>null</c> if the member could not be found.
+		/// </returns>
+		new IMember Resolve(ITypeResolveContext context);
 	}
 	
 	/// <summary>
@@ -132,6 +163,34 @@ namespace ICSharpCode.NRefactory.TypeSystem
 		/// <summary>
 		/// Creates a member reference that can be used to rediscover this member in another compilation.
 		/// </summary>
+		/// <remarks>
+		/// If this member is specialized using open generic types, the resulting member reference will need to be looked up in an appropriate generic context.
+		/// Otherwise, the main resolve context of a compilation is sufficient.
+		/// </remarks>
+		[Obsolete("Use the ToReference method instead.")]
 		IMemberReference ToMemberReference();
+		
+				/// <summary>
+		/// Creates a member reference that can be used to rediscover this member in another compilation.
+		/// </summary>
+		/// <remarks>
+		/// If this member is specialized using open generic types, the resulting member reference will need to be looked up in an appropriate generic context.
+		/// Otherwise, the main resolve context of a compilation is sufficient.
+		/// </remarks>
+		new IMemberReference ToReference();
+
+		/// <summary>
+		/// Gets the substitution belonging to this specialized member.
+		/// Returns TypeParameterSubstitution.Identity for not specialized members.
+		/// </summary>
+		TypeParameterSubstitution Substitution {
+			get;
+		}
+
+		/// <summary>
+		/// Specializes this member with the given substitution.
+		/// If this member is already specialized, the new substitution is composed with the existing substition.
+		/// </summary>
+		IMember Specialize(TypeParameterSubstitution substitution);
 	}
 }

@@ -1,4 +1,4 @@
-﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+﻿// Copyright (c) 2010-2013 AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -18,7 +18,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Linq;
 using ICSharpCode.NRefactory.Documentation;
 using ICSharpCode.NRefactory.Utils;
@@ -95,8 +94,9 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 					return result;
 				}
 				result = new List<IAttribute>();
+				var context = parentContext.WithCurrentTypeDefinition(this);
 				foreach (IUnresolvedTypeDefinition part in parts) {
-					ITypeResolveContext parentContextForPart = part.CreateResolveContext(parentContext);
+					ITypeResolveContext parentContextForPart = part.CreateResolveContext(context);
 					foreach (var attr in part.Attributes) {
 						result.Add(attr.CreateResolvedAttribute(parentContextForPart));
 					}
@@ -111,8 +111,13 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 			get { return parts; }
 		}
 		
+		public SymbolKind SymbolKind {
+			get { return parts[0].SymbolKind; }
+		}
+		
+		[Obsolete("Use the SymbolKind property instead.")]
 		public EntityType EntityType {
-			get { return parts[0].EntityType; }
+			get { return (EntityType)parts[0].SymbolKind; }
 		}
 		
 		public virtual TypeKind Kind {
@@ -131,7 +136,7 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 					result = (
 						from part in parts
 						from nestedTypeRef in part.NestedTypes
-						group nestedTypeRef by nestedTypeRef.Name into g
+						group nestedTypeRef by new { nestedTypeRef.Name, nestedTypeRef.TypeParameters.Count } into g
 						select new DefaultResolvedTypeDefinition(new SimpleTypeResolveContext(this), g.ToArray())
 					).ToList<ITypeDefinition>().AsReadOnly();
 					return LazyInit.GetOrSet(ref this.nestedTypes, result);
@@ -161,7 +166,7 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 						var info = partialMethodInfos[i];
 						int memberIndex = NonPartialMemberCount + i;
 						resolvedMembers[memberIndex] = DefaultResolvedMethod.CreateFromMultipleParts(
-							info.Parts.ToArray(), info.PrimaryContext, false);
+							info.Parts.ToArray(), info.Contexts.ToArray (), false);
 					}
 				}
 			}
@@ -250,25 +255,26 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 			public readonly int TypeParameterCount;
 			public readonly IList<IParameter> Parameters;
 			public readonly List<IUnresolvedMethod> Parts = new List<IUnresolvedMethod>();
-			public ITypeResolveContext PrimaryContext;
-			
+			public readonly List<ITypeResolveContext> Contexts = new List<ITypeResolveContext>();
+
 			public PartialMethodInfo(IUnresolvedMethod method, ITypeResolveContext context)
 			{
 				this.Name = method.Name;
 				this.TypeParameterCount = method.TypeParameters.Count;
 				this.Parameters = method.Parameters.CreateResolvedParameters(context);
 				this.Parts.Add(method);
-				this.PrimaryContext = context;
+				this.Contexts.Add (context);
 			}
 			
 			public void AddPart(IUnresolvedMethod method, ITypeResolveContext context)
 			{
-				if (method.IsPartialMethodImplementation) {
+				if (method.HasBody) {
 					// make the implementation the primary part
 					this.Parts.Insert(0, method);
-					this.PrimaryContext = context;
+					this.Contexts.Insert (0, context);
 				} else {
 					this.Parts.Add(method);
+					this.Contexts.Add (context);
 				}
 			}
 			
@@ -297,7 +303,7 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 				ITypeResolveContext contextForPart = parentContextForPart.WithCurrentTypeDefinition(this);
 				foreach (var member in part.Members) {
 					IUnresolvedMethod method = member as IUnresolvedMethod;
-					if (method != null && (method.IsPartialMethodDeclaration || method.IsPartialMethodImplementation)) {
+					if (method != null && method.IsPartial) {
 						// Merge partial method declaration and implementation
 						if (partialMethodInfos == null)
 							partialMethodInfos = new List<PartialMethodInfo>();
@@ -321,14 +327,11 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 					}
 				}
 				
-				DefaultUnresolvedTypeDefinition dutd = part as DefaultUnresolvedTypeDefinition;
-				if (dutd != null) {
-					addDefaultConstructorIfRequired |= dutd.AddDefaultConstructorIfRequired;
-				}
+				addDefaultConstructorIfRequired |= part.AddDefaultConstructorIfRequired;
 			}
 			if (addDefaultConstructorIfRequired) {
 				TypeKind kind = this.Kind;
-				if (kind == TypeKind.Class && !this.IsStatic && !unresolvedMembers.Any(m => m.EntityType == EntityType.Constructor && !m.IsStatic)
+				if (kind == TypeKind.Class && !this.IsStatic && !unresolvedMembers.Any(m => m.SymbolKind == SymbolKind.Constructor && !m.IsStatic)
 				    || kind == TypeKind.Enum || kind == TypeKind.Struct)
 				{
 					contextPerMember.Add(parts[0].CreateResolveContext(parentContext).WithCurrentTypeDefinition(this));
@@ -347,7 +350,7 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 			get {
 				var members = GetMemberList();
 				for (int i = 0; i < members.unresolvedMembers.Length; i++) {
-					if (members.unresolvedMembers[i].EntityType == EntityType.Field)
+					if (members.unresolvedMembers[i].SymbolKind == SymbolKind.Field)
 						yield return (IField)members[i];
 				}
 			}
@@ -370,9 +373,9 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 			get {
 				var members = GetMemberList();
 				for (int i = 0; i < members.unresolvedMembers.Length; i++) {
-					switch (members.unresolvedMembers[i].EntityType) {
-						case EntityType.Property:
-						case EntityType.Indexer:
+					switch (members.unresolvedMembers[i].SymbolKind) {
+						case SymbolKind.Property:
+						case SymbolKind.Indexer:
 							yield return (IProperty)members[i];
 							break;
 					}
@@ -384,7 +387,7 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 			get {
 				var members = GetMemberList();
 				for (int i = 0; i < members.unresolvedMembers.Length; i++) {
-					if (members.unresolvedMembers[i].EntityType == EntityType.Event)
+					if (members.unresolvedMembers[i].SymbolKind == SymbolKind.Event)
 						yield return (IEvent)members[i];
 				}
 			}
@@ -398,9 +401,9 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 				KnownTypeCode result = this.knownTypeCode;
 				if (result == (KnownTypeCode)(-1)) {
 					result = KnownTypeCode.None;
+					ICompilation compilation = this.Compilation;
 					for (int i = 0; i < KnownTypeReference.KnownTypeCodeCount; i++) {
-						KnownTypeReference r = KnownTypeReference.Get((KnownTypeCode)i);
-						if (r != null && r.Resolve(parentContext) == this) {
+						if (compilation.FindType((KnownTypeCode)i) == this) {
 							result = (KnownTypeCode)i;
 							break;
 						}
@@ -474,6 +477,10 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 			return Methods.Any(m => m.IsExtensionMethod);
 		}
 		
+		public bool IsPartial {
+			get { return parts.Length > 1 || parts[0].IsPartial; }
+		}
+		
 		public bool? IsReferenceType {
 			get {
 				switch (this.Kind) {
@@ -495,7 +502,18 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 		public int TypeParameterCount {
 			get { return parts[0].TypeParameters.Count; }
 		}
-		
+
+		public IList<IType> TypeArguments {
+			get {
+				// ToList() call is necessary because IList<> isn't covariant
+				return TypeParameters.ToList<IType>();
+			}
+		}
+
+		public bool IsParameterized {
+			get { return false; }
+		}
+
 		#region DirectBaseTypes
 		IList<IType> directBaseTypes;
 		
@@ -504,9 +522,19 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 				IList<IType> result = LazyInit.VolatileRead(ref this.directBaseTypes);
 				if (result != null) {
 					return result;
-				} else {
-					result = CalculateDirectBaseTypes();
-					return LazyInit.GetOrSet(ref this.directBaseTypes, result);
+				}
+				using (var busyLock = BusyManager.Enter(this)) {
+					if (busyLock.Success) {
+						result = CalculateDirectBaseTypes();
+						return LazyInit.GetOrSet(ref this.directBaseTypes, result);
+					} else {
+						// This can happen for "class Test : $Test.Base$ { public class Base {} }"
+						// and also for the valid code
+						// "class Test : Base<Test.Inner> { public class Inner {} }"
+						
+						// Don't cache the error!
+						return EmptyList<IType>.Instance;
+					}
 				}
 			}
 		}
@@ -569,6 +597,10 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 			get { return parts[0].Namespace; }
 		}
 		
+		public FullTypeName FullTypeName {
+			get { return parts[0].FullTypeName; }
+		}
+		
 		public DomRegion Region {
 			get { return parts[0].Region; }
 		}
@@ -592,7 +624,7 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 		public virtual DocumentationComment Documentation {
 			get {
 				foreach (var part in parts) {
-					var unresolvedProvider = part.ParsedFile as IUnresolvedDocumentationProvider;
+					var unresolvedProvider = part.UnresolvedFile as IUnresolvedDocumentationProvider;
 					if (unresolvedProvider != null) {
 						var doc = unresolvedProvider.GetDocumentation(part, this);
 						if (doc != null)
@@ -676,6 +708,11 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 					asmRef = null;
 				return new GetClassTypeReference(asmRef, this.Namespace, this.Name, this.TypeParameterCount);
 			}
+		}
+		
+		ISymbolReference ISymbol.ToReference()
+		{
+			return (ISymbolReference)ToTypeReference();
 		}
 		
 		public IEnumerable<IType> GetNestedTypes(Predicate<ITypeDefinition> filter = null, GetMemberOptions options = GetMemberOptions.None)
@@ -782,7 +819,7 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 				using (var busyLock = BusyManager.Enter(this)) {
 					if (busyLock.Success) {
 						return coClass.GetConstructors(filter, options)
-							.Select(m => new SpecializedMethod(m, TypeParameterSubstitution.Identity) { DeclaringType = this });
+							.Select(m => new SpecializedMethod(m, m.Substitution) { DeclaringType = this });
 					}
 				}
 				return EmptyList<IMethod>.Instance;
@@ -829,8 +866,90 @@ namespace ICSharpCode.NRefactory.TypeSystem.Implementation
 				return GetMembersHelper.GetMembers(this, filter, options);
 			}
 		}
+		
+		public virtual IEnumerable<IMethod> GetAccessors(Predicate<IUnresolvedMethod> filter = null, GetMemberOptions options = GetMemberOptions.None)
+		{
+			if ((options & GetMemberOptions.IgnoreInheritedMembers) == GetMemberOptions.IgnoreInheritedMembers) {
+				return GetFilteredAccessors(filter);
+			} else {
+				return GetMembersHelper.GetAccessors(this, filter, options);
+			}
+		}
+		
+		IEnumerable<IMethod> GetFilteredAccessors(Predicate<IUnresolvedMethod> filter)
+		{
+			var members = GetMemberList();
+			for (int i = 0; i < members.unresolvedMembers.Length; i++) {
+				IUnresolvedMember unresolved = members.unresolvedMembers[i];
+				var unresolvedProperty = unresolved as IUnresolvedProperty;
+				var unresolvedEvent = unresolved as IUnresolvedEvent;
+				if (unresolvedProperty != null) {
+					if (unresolvedProperty.CanGet && (filter == null || filter(unresolvedProperty.Getter)))
+						yield return ((IProperty)members[i]).Getter;
+					if (unresolvedProperty.CanSet && (filter == null || filter(unresolvedProperty.Setter)))
+						yield return ((IProperty)members[i]).Setter;
+				} else if (unresolvedEvent != null) {
+					if (unresolvedEvent.CanAdd && (filter == null || filter(unresolvedEvent.AddAccessor)))
+						yield return ((IEvent)members[i]).AddAccessor;
+					if (unresolvedEvent.CanRemove && (filter == null || filter(unresolvedEvent.RemoveAccessor)))
+						yield return ((IEvent)members[i]).RemoveAccessor;
+					if (unresolvedEvent.CanInvoke && (filter == null || filter(unresolvedEvent.InvokeAccessor)))
+						yield return ((IEvent)members[i]).InvokeAccessor;
+				}
+			}
+		}
 		#endregion
 		
+		#region GetInterfaceImplementation
+		public IMember GetInterfaceImplementation(IMember interfaceMember)
+		{
+			return GetInterfaceImplementation(new[] { interfaceMember })[0];
+		}
+		
+		public IList<IMember> GetInterfaceImplementation(IList<IMember> interfaceMembers)
+		{
+			// TODO: review the subtle rules for interface reimplementation,
+			// write tests and fix this method.
+			// Also virtual/override is going to be tricky -
+			// I think we'll need to consider the 'virtual' method first for
+			// reimplemenatation purposes, but then actually return the 'override'
+			// (as that's the method that ends up getting called)
+			
+			interfaceMembers = interfaceMembers.ToList(); // avoid evaluating more than once
+			
+			var result = new IMember[interfaceMembers.Count];
+			var signatureToIndexDict = new MultiDictionary<IMember, int>(SignatureComparer.Ordinal);
+			for (int i = 0; i < interfaceMembers.Count; i++) {
+				signatureToIndexDict.Add(interfaceMembers[i], i);
+			}
+			foreach (var member in GetMembers(m => !m.IsExplicitInterfaceImplementation)) {
+				foreach (int interfaceMemberIndex in signatureToIndexDict[member]) {
+					result[interfaceMemberIndex] = member;
+				}
+			}
+			foreach (var explicitImpl in GetMembers(m => m.IsExplicitInterfaceImplementation)) {
+				foreach (var interfaceMember in explicitImpl.ImplementedInterfaceMembers) {
+					foreach (int potentialMatchingIndex in signatureToIndexDict[interfaceMember]) {
+						if (interfaceMember.Equals(interfaceMembers[potentialMatchingIndex])) {
+							result[potentialMatchingIndex] = explicitImpl;
+						}
+					}
+				}
+			}
+			return result;
+		}
+		#endregion
+		
+		public TypeParameterSubstitution GetSubstitution()
+		{
+			return TypeParameterSubstitution.Identity;
+		}
+		
+		public TypeParameterSubstitution GetSubstitution(IList<IType> methodTypeArguments)
+		{
+			return TypeParameterSubstitution.Identity;
+		}
+
 		public bool Equals(IType other)
 		{
 			return this == other;

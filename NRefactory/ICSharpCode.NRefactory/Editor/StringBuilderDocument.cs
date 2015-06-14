@@ -1,4 +1,4 @@
-﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+﻿// Copyright (c) 2010-2013 AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -41,9 +41,25 @@ namespace ICSharpCode.NRefactory.Editor
 			b = new StringBuilder();
 		}
 		
+		/// <summary>
+		/// Creates a new StringBuilderDocument with the specified initial text.
+		/// </summary>
 		public StringBuilderDocument(string text)
 		{
+			if (text == null)
+				throw new ArgumentNullException("text");
 			b = new StringBuilder(text);
+		}
+		
+		/// <summary>
+		/// Creates a new StringBuilderDocument with the initial text copied from the specified text source.
+		/// </summary>
+		public StringBuilderDocument(ITextSource textSource)
+		{
+			if (textSource == null)
+				throw new ArgumentNullException("textSource");
+			b = new StringBuilder(textSource.TextLength);
+			textSource.WriteTextTo(new StringWriter(b));
 		}
 		
 		/// <inheritdoc/>
@@ -105,14 +121,32 @@ namespace ICSharpCode.NRefactory.Editor
 		}
 		
 		/// <inheritdoc/>
+		public void Insert(int offset, ITextSource text)
+		{
+			if (text == null)
+				throw new ArgumentNullException("text");
+			Replace(offset, 0, text.Text);
+		}
+		
+		/// <inheritdoc/>
 		public void Insert(int offset, string text, AnchorMovementType defaultAnchorMovementType)
 		{
 			if (offset < 0 || offset > this.TextLength)
 				throw new ArgumentOutOfRangeException("offset");
+			if (text == null)
+				throw new ArgumentNullException("text");
 			if (defaultAnchorMovementType == AnchorMovementType.BeforeInsertion)
 				PerformChange(new InsertionWithMovementBefore(offset, text));
 			else
 				Replace(offset, 0, text);
+		}
+		
+		/// <inheritdoc/>
+		public void Insert(int offset, ITextSource text, AnchorMovementType defaultAnchorMovementType)
+		{
+			if (text == null)
+				throw new ArgumentNullException("text");
+			Insert(offset, text.Text, defaultAnchorMovementType);
 		}
 		
 		[Serializable]
@@ -149,6 +183,14 @@ namespace ICSharpCode.NRefactory.Editor
 			PerformChange(new TextChangeEventArgs(offset, b.ToString(offset, length), newText));
 		}
 		
+		/// <inheritdoc/>
+		public void Replace(int offset, int length, ITextSource newText)
+		{
+			if (newText == null)
+				throw new ArgumentNullException("newText");
+			Replace(offset, length, newText.Text);
+		}
+		
 		bool isInChange;
 		
 		void PerformChange(TextChangeEventArgs change)
@@ -166,7 +208,7 @@ namespace ICSharpCode.NRefactory.Editor
 					documentSnapshot = null;
 					cachedText = null;
 					b.Remove(change.Offset, change.RemovalLength);
-					b.Insert(change.Offset, change.InsertedText);
+					b.Insert(change.Offset, change.InsertedText.Text);
 					versionProvider.AppendChange(change);
 					
 					// Update anchors and fire Deleted events
@@ -220,7 +262,7 @@ namespace ICSharpCode.NRefactory.Editor
 		public IDocument CreateDocumentSnapshot()
 		{
 			if (documentSnapshot == null)
-				documentSnapshot = new ReadOnlyDocument(this);
+				documentSnapshot = new ReadOnlyDocument(this, this.FileName);
 			return documentSnapshot;
 		}
 		
@@ -247,6 +289,22 @@ namespace ICSharpCode.NRefactory.Editor
 		{
 			return new StringReader(GetText(offset, length));
 		}
+		
+		/// <inheritdoc/>
+		public void WriteTextTo(TextWriter writer)
+		{
+			if (writer == null)
+				throw new ArgumentNullException("writer");
+			writer.Write(this.Text);
+		}
+		
+		/// <inheritdoc/>
+		public void WriteTextTo(TextWriter writer, int offset, int length)
+		{
+			if (writer == null)
+				throw new ArgumentNullException("writer");
+			writer.Write(GetText(offset, length));
+		}
 		#endregion
 		
 		#region GetText / IndexOf
@@ -254,13 +312,13 @@ namespace ICSharpCode.NRefactory.Editor
 		
 		/// <inheritdoc/>
 		public string Text {
-			get { 
+			get {
 				if (cachedText == null)
 					cachedText = b.ToString();
 				return cachedText;
 			}
 			set {
-				Replace(0, b.Length, value); 
+				Replace(0, b.Length, value);
 			}
 		}
 		
@@ -284,6 +342,8 @@ namespace ICSharpCode.NRefactory.Editor
 		/// <inheritdoc/>
 		public string GetText(ISegment segment)
 		{
+			if (segment == null)
+				throw new ArgumentNullException("segment");
 			return b.ToString(segment.Offset, segment.Length);
 		}
 		
@@ -420,6 +480,14 @@ namespace ICSharpCode.NRefactory.Editor
 		public virtual object GetService(Type serviceType)
 		{
 			return null;
+		}
+		
+		/// <inheritdoc/>
+		public virtual event EventHandler FileNameChanged { add {} remove {} }
+		
+		/// <inheritdoc/>
+		public virtual string FileName {
+			get { return string.Empty; }
 		}
 	}
 }

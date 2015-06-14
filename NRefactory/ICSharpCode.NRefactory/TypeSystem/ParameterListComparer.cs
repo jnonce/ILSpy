@@ -1,4 +1,4 @@
-﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+﻿// Copyright (c) 2010-2013 AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -28,37 +28,44 @@ namespace ICSharpCode.NRefactory.TypeSystem
 	/// </summary>
 	/// <remarks>
 	/// 'ref int' and 'out int' are considered to be equal.
-	/// "Method{T}(T a)" and "Method{S}(S b)" are also considered equal.
+	/// 'object' and 'dynamic' are also equal.
+	/// For generic methods, "Method{T}(T a)" and "Method{S}(S b)" are considered equal.
+	/// However, "Method(T a)" and "Method(S b)" are not considered equal when the type parameters T and S belong to classes.
 	/// </remarks>
 	public sealed class ParameterListComparer : IEqualityComparer<IList<IParameter>>
 	{
 		public static readonly ParameterListComparer Instance = new ParameterListComparer();
 		
-		// We want to consider the parameter lists "Method<T>(T a)" and "Method<S>(S b)" as equal.
-		// However, the parameter types are not considered equal, as T is a different type parameter than S.
-		// In order to compare the method signatures, we will normalize all method type parameters.
-		sealed class NormalizeMethodTypeParametersVisitor : TypeVisitor
+		sealed class NormalizeTypeVisitor : TypeVisitor
 		{
 			public override IType VisitTypeParameter(ITypeParameter type)
 			{
-				if (type.OwnerType == EntityType.Method) {
+				if (type.OwnerType == SymbolKind.Method) {
 					return DummyTypeParameter.GetMethodTypeParameter(type.Index);
 				} else {
 					return base.VisitTypeParameter(type);
 				}
 			}
+			
+			public override IType VisitTypeDefinition(ITypeDefinition type)
+			{
+				if (type.KnownTypeCode == KnownTypeCode.Object)
+					return SpecialType.Dynamic;
+				return base.VisitTypeDefinition(type);
+			}
 		}
 		
-		readonly NormalizeMethodTypeParametersVisitor normalization = new NormalizeMethodTypeParametersVisitor();
+		static readonly NormalizeTypeVisitor normalizationVisitor = new NormalizeTypeVisitor();
 		
 		/// <summary>
 		/// Replaces all occurrences of method type parameters in the given type
 		/// by normalized type parameters. This allows comparing parameter types from different
 		/// generic methods.
 		/// </summary>
+		[Obsolete("Use DummyTypeParameter.NormalizeMethodTypeParameters instead if you only need to normalize type parameters. Also, consider if you need to normalize object vs. dynamic as well.")]
 		public IType NormalizeMethodTypeParameters(IType type)
 		{
-			return type.AcceptVisitor(normalization);
+			return DummyTypeParameter.NormalizeMethodTypeParameters(type);
 		}
 		
 		public bool Equals(IList<IParameter> x, IList<IParameter> y)
@@ -74,8 +81,12 @@ namespace ICSharpCode.NRefactory.TypeSystem
 					continue;
 				if (a == null || b == null)
 					return false;
-				IType aType = a.Type.AcceptVisitor(normalization);
-				IType bType = b.Type.AcceptVisitor(normalization);
+				
+				// We want to consider the parameter lists "Method<T>(T a)" and "Method<S>(S b)" as equal.
+				// However, the parameter types are not considered equal, as T is a different type parameter than S.
+				// In order to compare the method signatures, we will normalize all method type parameters.
+				IType aType = a.Type.AcceptVisitor(normalizationVisitor);
+				IType bType = b.Type.AcceptVisitor(normalizationVisitor);
 				
 				if (!aType.Equals(bType))
 					return false;
@@ -89,7 +100,7 @@ namespace ICSharpCode.NRefactory.TypeSystem
 			unchecked {
 				foreach (IParameter p in obj) {
 					hashCode *= 27;
-					IType type = p.Type.AcceptVisitor(normalization);
+					IType type = p.Type.AcceptVisitor(normalizationVisitor);
 					hashCode += type.GetHashCode();
 				}
 			}
@@ -123,7 +134,7 @@ namespace ICSharpCode.NRefactory.TypeSystem
 		{
 			if (x == y)
 				return true;
-			if (x == null || y == null || x.EntityType != y.EntityType || !nameComparer.Equals(x.Name, y.Name))
+			if (x == null || y == null || x.SymbolKind != y.SymbolKind || !nameComparer.Equals(x.Name, y.Name))
 				return false;
 			IParameterizedMember px = x as IParameterizedMember;
 			IParameterizedMember py = y as IParameterizedMember;
@@ -141,7 +152,7 @@ namespace ICSharpCode.NRefactory.TypeSystem
 		public int GetHashCode(IMember obj)
 		{
 			unchecked {
-				int hash = (int)obj.EntityType * 33 + nameComparer.GetHashCode(obj.Name);
+				int hash = (int)obj.SymbolKind * 33 + nameComparer.GetHashCode(obj.Name);
 				IParameterizedMember pm = obj as IParameterizedMember;
 				if (pm != null) {
 					hash *= 27;

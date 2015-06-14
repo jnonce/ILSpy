@@ -15,7 +15,7 @@
     <NoStdLib>False</NoStdLib>
     <WarningLevel>4</WarningLevel>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
-    <ApplicationIcon>Images\ILSpy.ico</ApplicationIcon>
+    <ApplicationIcon>Images\ILSpy-Large.ico</ApplicationIcon>
     <RunCodeAnalysis>False</RunCodeAnalysis>
     <StartArguments>/separate</StartArguments>
     <SignAssembly>True</SignAssembly>
@@ -99,8 +99,8 @@
     </Compile>
     <Compile Include="AssemblyList.cs" />
     <Compile Include="AssemblyListManager.cs" />
-    <Compile Include="AvalonEdit\IconMarginActionsProvider.cs" />
-    <Compile Include="Bookmarks\MemberBookmark.cs" />
+    <Compile Include="AvalonEdit\ITextMarker.cs" />
+    <Compile Include="AvalonEdit\TextMarkerService.cs" />
     <Compile Include="Commands\BrowseBackCommand.cs" />
     <Compile Include="Commands\BrowseForwardCommand.cs" />
     <Compile Include="CommandLineArguments.cs" />
@@ -177,6 +177,10 @@
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="Commands\SimpleCommand.cs" />
+    <Compile Include="SearchStrategies.cs" />
+    <Compile Include="TaskHelper.cs" />
+    <Compile Include="TextView\EditorCommands.cs" />
+    <Compile Include="TextView\FoldingCommands.cs" />
     <Compile Include="TreeNodes\Analyzer\AnalyzeContextMenuEntry.cs" />
     <Compile Include="TreeNodes\Analyzer\AnalyzedAssemblyTreeNode.cs" />
     <Compile Include="TreeNodes\Analyzer\AnalyzedAttributeAppliedToTreeNode.cs" />
@@ -192,9 +196,11 @@
     <Compile Include="TreeNodes\Analyzer\AnalyzedTypeInstantiationsTreeNode.cs" />
     <Compile Include="TreeNodes\Analyzer\AnalyzedTypeTreeNode.cs" />
     <Compile Include="TreeNodes\Analyzer\AnalyzedEventAccessorTreeNode.cs" />
+    <Compile Include="TreeNodes\Analyzer\AnalyzedTypeUsedByTreeNode.cs" />
     <Compile Include="TreeNodes\Analyzer\AnalyzedVirtualMethodUsedByTreeNode.cs" />
     <Compile Include="TreeNodes\Analyzer\AnalyzerEntityTreeNode.cs" />
     <Compile Include="TreeNodes\Analyzer\AnalyzerSearchTreeNode.cs" />
+    <Compile Include="TreeNodes\Analyzer\RemoveAnalyzeContextMenuEntry.cs" />
     <Compile Include="TreeNodes\Analyzer\Helpers.cs" />
     <Compile Include="TreeNodes\Analyzer\ScopedWhereUsedAnalyzer.cs" />
     <Compile Include="TreeNodes\BaseTypesEntryNode.cs" />
@@ -202,6 +208,8 @@
     <Compile Include="TreeNodes\FilterResult.cs" />
     <Compile Include="TreeNodes\IMemberTreeNode.cs" />
     <Compile Include="TreeNodes\ResourceNodes\CursorResourceEntryNode.cs" />
+    <Compile Include="TreeNodes\ResourceNodes\IconResourceEntryNode.cs" />
+    <Compile Include="TreeNodes\ResourceNodes\ImageListResourceEntryNode.cs" />
     <Compile Include="TreeNodes\ResourceNodes\ImageResourceEntryNode.cs" />
     <Compile Include="TreeNodes\ResourceNodes\XmlResourceNode.cs" />
     <Compile Include="TreeNodes\ResourceNodes\IResourceNodeFactory.cs" />
@@ -209,6 +217,7 @@
     <Compile Include="TreeNodes\ResourceNodes\XamlResourceNode.cs" />
     <Compile Include="TreeNodes\Analyzer\AnalyzedPropertyOverridesTreeNode.cs" />
     <Compile Include="TreeNodes\Analyzer\AnalyzedPropertyTreeNode.cs" />
+    <Compile Include="TreeNodes\SearchMsdnContextMenuEntry.cs" />
     <Compile Include="VB\ILSpyEnvironmentProvider.cs" />
     <Compile Include="VB\VBLanguage.cs" />
     <Compile Include="VB\VBTextOutputFormatter.cs" />
@@ -225,7 +234,11 @@
     <EmbeddedResource Include="..\doc\license.txt">
       <Link>license.txt</Link>
     </EmbeddedResource>
+    <EmbeddedResource Include="..\doc\MS-PL.txt">
+      <Link>MS-PL.txt</Link>
+    </EmbeddedResource>
     <Resource Include="Images\AssemblyList.png" />
+    <Resource Include="Images\AssemblyListGAC.png" />
     <Resource Include="Images\AssemblyWarning.png" />
     <Resource Include="Images\ViewCode.png" />
     <Resource Include="Images\SaveFile.png" />
@@ -239,6 +252,7 @@
     <Resource Include="Images\Breakpoint.png" />
     <Resource Include="Images\CurrentLine.png" />
     <Resource Include="Images\DisabledBreakpoint.png" />
+    <None Include="Images\ResourceXsl.png" />
     <None Include="Properties\app.config.template" />
     <None Include="Properties\AssemblyInfo.template.cs" />
     <Compile Include="Properties\WPFAssemblyInfo.cs" />
@@ -356,10 +370,6 @@
       <Project>{984CC812-9470-4A13-AFF9-CC44068D666C}</Project>
       <Name>ICSharpCode.Decompiler</Name>
     </ProjectReference>
-    <ProjectReference Include="..\ILSpy.SharpDevelop.LGPL\ILSpy.SharpDevelop.LGPL.csproj">
-      <Project>{704F66F1-5C7F-4326-A7AA-C604A3896D4E}</Project>
-      <Name>ILSpy.SharpDevelop.LGPL</Name>
-    </ProjectReference>
     <ProjectReference Include="..\Mono.Cecil\Mono.Cecil.csproj">
       <Project>{D68133BD-1E63-496E-9EDE-4FBDBF77B486}</Project>
       <Name>Mono.Cecil</Name>
@@ -389,7 +399,6 @@
       <Name>ICSharpCode.TreeView</Name>
     </ProjectReference>
   </ItemGroup>
-  <ItemGroup />
   <ItemGroup>
     <Resource Include="Images\ResourceXml.png" />
     <Resource Include="Images\ResourceXsd.png" />

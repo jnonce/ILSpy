@@ -34,6 +34,11 @@ namespace Mono.CSharp
 			Default = 3,		// argument created from default parameter value
 			DynamicTypeName = 4,	// System.Type argument for dynamic binding
 			ExtensionType = 5,	// Instance expression inserted as the first argument
+
+			// Conditional instance expression inserted as the first argument
+			ExtensionTypeConditionalAccess = 5 | ConditionalAccessFlag,
+
+			ConditionalAccessFlag = 1 << 7
 		}
 
 		public readonly AType ArgType;
@@ -47,9 +52,6 @@ namespace Mono.CSharp
 
 		public Argument (Expression expr)
 		{
-			if (expr == null)
-				throw new ArgumentNullException ();
-
 			this.Expr = expr;
 		}
 
@@ -61,6 +63,12 @@ namespace Mono.CSharp
 
 		public bool IsDefaultArgument {
 			get { return ArgType == AType.Default; }
+		}
+
+		public bool IsExtensionType {
+			get {
+				return (ArgType & AType.ExtensionType) == AType.ExtensionType;
+			}
 		}
 
 		public Parameter.Modifier Modifier {
@@ -108,7 +116,13 @@ namespace Mono.CSharp
 		public virtual void Emit (EmitContext ec)
 		{
 			if (!IsByRef) {
-				Expr.Emit (ec);
+				if (ArgType == AType.ExtensionTypeConditionalAccess) {
+					var ie = new InstanceEmitter (Expr, false);
+					ie.Emit (ec, true);
+				} else {
+					Expr.Emit (ec);
+				}
+
 				return;
 			}
 
@@ -130,12 +144,35 @@ namespace Mono.CSharp
 			return this;
 		}
 
+		public void FlowAnalysis (FlowAnalysisContext fc)
+		{
+			if (ArgType == AType.Out) {
+				var vr = Expr as VariableReference;
+				if (vr != null) {
+					if (vr.VariableInfo != null)
+						fc.SetVariableAssigned (vr.VariableInfo);
+
+					return;
+				}
+
+				var fe = Expr as FieldExpr;
+				if (fe != null) {
+					fe.SetFieldAssigned (fc);
+					return;
+				}
+
+				return;
+			}
+
+			Expr.FlowAnalysis (fc);
+		}
+
 		public string GetSignatureForError ()
 		{
 			if (Expr.eclass == ExprClass.MethodGroup)
 				return Expr.ExprClassName;
 
-			return TypeManager.CSharpName (Expr.Type);
+			return Expr.Type.GetSignatureForError ();
 		}
 
 		public bool ResolveMethodGroup (ResolveContext ec)
@@ -155,18 +192,16 @@ namespace Mono.CSharp
 
 		public void Resolve (ResolveContext ec)
 		{
-//			using (ec.With (ResolveContext.Options.DoFlowAnalysis, true)) {
-				// Verify that the argument is readable
-				if (ArgType != AType.Out)
-					Expr = Expr.Resolve (ec);
+			// Verify that the argument is readable
+			if (ArgType != AType.Out)
+				Expr = Expr.Resolve (ec);
 
-				// Verify that the argument is writeable
-				if (Expr != null && IsByRef)
-					Expr = Expr.ResolveLValue (ec, EmptyExpression.OutAccess);
+			// Verify that the argument is writeable
+			if (Expr != null && IsByRef)
+				Expr = Expr.ResolveLValue (ec, EmptyExpression.OutAccess);
 
-				if (Expr == null)
-					Expr = ErrorExpression.Instance;
-//			}
+			if (Expr == null)
+				Expr = ErrorExpression.Instance;
 		}
 	}
 
@@ -258,6 +293,16 @@ namespace Mono.CSharp
 				ordered.Add (arg);
 			}
 
+			public override void FlowAnalysis (FlowAnalysisContext fc, List<MovableArgument> movable = null)
+			{
+				foreach (var arg in ordered) {
+					if (arg.ArgType != Argument.AType.Out)
+						arg.FlowAnalysis (fc);
+				}
+
+				base.FlowAnalysis (fc, ordered);
+			}
+
 			public override Arguments Emit (EmitContext ec, bool dup_args, bool prepareAwait)
 			{
 				foreach (var a in ordered) {
@@ -320,20 +365,20 @@ namespace Mono.CSharp
 
 				if (a.Expr is Constant) {
 					info_flags = new Binary (Binary.Operator.BitwiseOr, info_flags,
-						new MemberAccess (new MemberAccess (binder, info_flags_enum, loc), "Constant", loc), loc);
+						new MemberAccess (new MemberAccess (binder, info_flags_enum, loc), "Constant", loc));
 				} else if (a.ArgType == Argument.AType.Ref) {
 					info_flags = new Binary (Binary.Operator.BitwiseOr, info_flags,
-						new MemberAccess (new MemberAccess (binder, info_flags_enum, loc), "IsRef", loc), loc);
+						new MemberAccess (new MemberAccess (binder, info_flags_enum, loc), "IsRef", loc));
 					info_flags = new Binary (Binary.Operator.BitwiseOr, info_flags,
-						new MemberAccess (new MemberAccess (binder, info_flags_enum, loc), "UseCompileTimeType", loc), loc);
+						new MemberAccess (new MemberAccess (binder, info_flags_enum, loc), "UseCompileTimeType", loc));
 				} else if (a.ArgType == Argument.AType.Out) {
 					info_flags = new Binary (Binary.Operator.BitwiseOr, info_flags,
-						new MemberAccess (new MemberAccess (binder, info_flags_enum, loc), "IsOut", loc), loc);
+						new MemberAccess (new MemberAccess (binder, info_flags_enum, loc), "IsOut", loc));
 					info_flags = new Binary (Binary.Operator.BitwiseOr, info_flags,
-						new MemberAccess (new MemberAccess (binder, info_flags_enum, loc), "UseCompileTimeType", loc), loc);
+						new MemberAccess (new MemberAccess (binder, info_flags_enum, loc), "UseCompileTimeType", loc));
 				} else if (a.ArgType == Argument.AType.DynamicTypeName) {
 					info_flags = new Binary (Binary.Operator.BitwiseOr, info_flags,
-						new MemberAccess (new MemberAccess (binder, info_flags_enum, loc), "IsStaticType", loc), loc);
+						new MemberAccess (new MemberAccess (binder, info_flags_enum, loc), "IsStaticType", loc));
 				}
 
 				var arg_type = a.Expr.Type;
@@ -350,18 +395,18 @@ namespace Mono.CSharp
 					} else if (arg_type.Kind == MemberKind.Void || arg_type == InternalType.Arglist || arg_type.IsPointer) {
 						rc.Report.Error (1978, a.Expr.Location,
 							"An expression of type `{0}' cannot be used as an argument of dynamic operation",
-							TypeManager.CSharpName (arg_type));
+							arg_type.GetSignatureForError ());
 					}
 
 					info_flags = new Binary (Binary.Operator.BitwiseOr, info_flags,
-						new MemberAccess (new MemberAccess (binder, info_flags_enum, loc), "UseCompileTimeType", loc), loc);
+						new MemberAccess (new MemberAccess (binder, info_flags_enum, loc), "UseCompileTimeType", loc));
 				}
 
 				string named_value;
 				NamedArgument na = a as NamedArgument;
 				if (na != null) {
 					info_flags = new Binary (Binary.Operator.BitwiseOr, info_flags,
-						new MemberAccess (new MemberAccess (binder, info_flags_enum, loc), "NamedArgument", loc), loc);
+						new MemberAccess (new MemberAccess (binder, info_flags_enum, loc), "NamedArgument", loc));
 
 					named_value = na.Name;
 				} else {
@@ -477,6 +522,36 @@ namespace Mono.CSharp
 				return new Arguments (dups);
 
 			return null;
+		}
+
+		public virtual void FlowAnalysis (FlowAnalysisContext fc, List<MovableArgument> movable = null)
+		{
+			bool has_out = false;
+			foreach (var arg in args) {
+				if (arg.ArgType == Argument.AType.Out) {
+					has_out = true;
+					continue;
+				}
+
+				if (movable == null) {
+					arg.FlowAnalysis (fc);
+					continue;
+				}
+
+				var ma = arg as MovableArgument;
+				if (ma != null && !movable.Contains (ma))
+					arg.FlowAnalysis (fc);
+			}
+
+			if (!has_out)
+				return;
+
+			foreach (var arg in args) {
+				if (arg.ArgType != Argument.AType.Out)
+					continue;
+
+				arg.FlowAnalysis (fc);
+			}
 		}
 
 		public List<Argument>.Enumerator GetEnumerator ()

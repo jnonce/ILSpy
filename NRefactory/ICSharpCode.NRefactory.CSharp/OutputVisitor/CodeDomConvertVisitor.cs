@@ -1,4 +1,4 @@
-// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+// Copyright (c) 2010-2013 AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -21,12 +21,12 @@ using System.CodeDom;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using ICSharpCode.NRefactory.CSharp.Refactoring;
 using ICSharpCode.NRefactory.CSharp.Resolver;
 using ICSharpCode.NRefactory.CSharp.TypeSystem;
 using ICSharpCode.NRefactory.PatternMatching;
 using ICSharpCode.NRefactory.Semantics;
 using ICSharpCode.NRefactory.TypeSystem;
-using ICSharpCode.NRefactory.TypeSystem.Implementation;
 
 namespace ICSharpCode.NRefactory.CSharp
 {
@@ -38,37 +38,47 @@ namespace ICSharpCode.NRefactory.CSharp
 	/// </remarks>
 	public class CodeDomConvertVisitor : IAstVisitor<CodeObject>
 	{
-		//ICompilation compilation = MinimalResolveContext.Instance;
 		CSharpAstResolver resolver;
-		bool useFullyQualifiedTypeNames;
 		
 		/// <summary>
-		/// Gets/Sets whether the visitor should use fully-qualified type references.
+		/// Gets/Sets whether the visitor should convert short type names into
+		/// fully qualified type names.
+		/// The default is <c>false</c>.
 		/// </summary>
-		public bool UseFullyQualifiedTypeNames {
-			get { return useFullyQualifiedTypeNames; }
-			set { useFullyQualifiedTypeNames = value; }
+		public bool UseFullyQualifiedTypeNames { get; set; }
+		
+		/// <summary>
+		/// Gets whether the visitor is allowed to produce snippet nodes for
+		/// code that cannot be converted.
+		/// The default is <c>true</c>. If this property is set to <c>false</c>,
+		/// unconvertible code will throw a NotSupportedException.
+		/// </summary>
+		public bool AllowSnippetNodes { get; set; }
+		
+		public CodeDomConvertVisitor()
+		{
+			this.AllowSnippetNodes = true;
 		}
 		
 		/// <summary>
-		/// Converts a compilation unit to CodeDom.
+		/// Converts a syntax tree to CodeDom.
 		/// </summary>
-		/// <param name="compilationUnit">The input compilation unit.</param>
+		/// <param name="syntaxTree">The input syntax tree.</param>
 		/// <param name="compilation">The current compilation.</param>
-		/// <param name="parsedFile">CSharpParsedFile, used for resolving.</param>
+		/// <param name="unresolvedFile">CSharpUnresolvedFile, used for resolving.</param>
 		/// <returns>Converted CodeCompileUnit</returns>
 		/// <remarks>
 		/// This conversion process requires a resolver because it needs to distinguish field/property/event references etc.
 		/// </remarks>
-		public CodeCompileUnit Convert(ICompilation compilation, CompilationUnit compilationUnit, CSharpParsedFile parsedFile)
+		public CodeCompileUnit Convert(ICompilation compilation, SyntaxTree syntaxTree, CSharpUnresolvedFile unresolvedFile)
 		{
-			if (compilationUnit == null)
-				throw new ArgumentNullException("compilationUnit");
+			if (syntaxTree == null)
+				throw new ArgumentNullException("syntaxTree");
 			if (compilation == null)
 				throw new ArgumentNullException("compilation");
 			
-			CSharpAstResolver resolver = new CSharpAstResolver(compilation, compilationUnit, parsedFile);
-			return (CodeCompileUnit)Convert(compilationUnit, resolver);
+			CSharpAstResolver resolver = new CSharpAstResolver(compilation, syntaxTree, unresolvedFile);
+			return (CodeCompileUnit)Convert(syntaxTree, resolver);
 		}
 		
 		/// <summary>
@@ -134,9 +144,17 @@ namespace ICSharpCode.NRefactory.CSharp
 			return result.ToArray();
 		}
 		
-		CodeTypeReference Convert(IType type)
+		public CodeTypeReference Convert(IType type)
 		{
-			return new CodeTypeReference(type.ReflectionName);
+			if (type.Kind == TypeKind.Array) {
+				ArrayType a = (ArrayType)type;
+				return new CodeTypeReference(Convert(a.ElementType), a.Dimensions);
+			} else if (type is ParameterizedType) {
+				var pt = (ParameterizedType)type;
+				return new CodeTypeReference(pt.GetDefinition().ReflectionName, pt.TypeArguments.Select(Convert).ToArray());
+			} else {
+				return new CodeTypeReference(type.ReflectionName);
+			}
 		}
 		
 		CodeStatement Convert(Statement stmt)
@@ -148,6 +166,8 @@ namespace ICSharpCode.NRefactory.CSharp
 		{
 			List<CodeStatement> result = new List<CodeStatement>();
 			foreach (Statement stmt in block.Statements) {
+				if (stmt is EmptyStatement)
+					continue;
 				CodeStatement s = Convert(stmt);
 				if (s != null)
 					result.Add(s);
@@ -160,6 +180,8 @@ namespace ICSharpCode.NRefactory.CSharp
 			BlockStatement block = embeddedStatement as BlockStatement;
 			if (block != null) {
 				return ConvertBlock(block);
+			} else if (embeddedStatement is EmptyStatement) {
+				return new CodeStatement[0];
 			}
 			CodeStatement s = Convert(embeddedStatement);
 			if (s != null)
@@ -170,6 +192,8 @@ namespace ICSharpCode.NRefactory.CSharp
 		
 		string MakeSnippet(AstNode node)
 		{
+			if (!AllowSnippetNodes)
+				throw new NotSupportedException();
 			StringWriter w = new StringWriter();
 			CSharpOutputVisitor v = new CSharpOutputVisitor(w, FormattingOptionsFactory.CreateMono ());
 			node.AcceptVisitor(v);
@@ -189,7 +213,17 @@ namespace ICSharpCode.NRefactory.CSharp
 		{
 			return new CodeSnippetStatement(MakeSnippet(stmt));
 		}
-		
+
+		CodeObject IAstVisitor<CodeObject>.VisitNullNode(AstNode nullNode)
+		{
+			return null;
+		}
+
+		CodeObject IAstVisitor<CodeObject>.VisitErrorNode(AstNode errorNode)
+		{
+			return null;
+		}
+
 		CodeObject IAstVisitor<CodeObject>.VisitAnonymousMethodExpression(AnonymousMethodExpression anonymousMethodExpression)
 		{
 			return MakeSnippetExpression(anonymousMethodExpression);
@@ -371,7 +405,7 @@ namespace ICSharpCode.NRefactory.CSharp
 			TypeResolveResult trr = rr as TypeResolveResult;
 			if (trr != null) {
 				CodeTypeReference typeRef;
-				if (useFullyQualifiedTypeNames) {
+				if (UseFullyQualifiedTypeNames) {
 					typeRef = Convert(trr.Type);
 				} else {
 					typeRef = new CodeTypeReference(identifierExpression.Identifier);
@@ -380,7 +414,7 @@ namespace ICSharpCode.NRefactory.CSharp
 				return new CodeTypeReferenceExpression(typeRef);
 			}
 			MethodGroupResolveResult mgrr = rr as MethodGroupResolveResult;
-			if (mgrr != null) {
+			if (mgrr != null || identifierExpression.TypeArguments.Any()) {
 				return new CodeMethodReferenceExpression(new CodeThisReferenceExpression(), identifierExpression.Identifier, Convert(identifierExpression.TypeArguments));
 			}
 			return new CodeVariableReferenceExpression(identifierExpression.Identifier);
@@ -441,8 +475,11 @@ namespace ICSharpCode.NRefactory.CSharp
 			CodeExpression target = Convert(memberReferenceExpression.Target);
 			ResolveResult rr = Resolve(memberReferenceExpression);
 			MemberResolveResult mrr = rr as MemberResolveResult;
+			TypeResolveResult trr = rr as TypeResolveResult;
 			if (mrr != null) {
 				return HandleMemberReference(target, memberReferenceExpression.MemberName, memberReferenceExpression.TypeArguments, mrr);
+			} else if (trr != null) {
+				return new CodeTypeReferenceExpression(Convert(trr.Type));
 			} else {
 				if (memberReferenceExpression.TypeArguments.Any() || rr is MethodGroupResolveResult) {
 					return new CodeMethodReferenceExpression(target, memberReferenceExpression.MemberName, Convert(memberReferenceExpression.TypeArguments));
@@ -564,11 +601,6 @@ namespace ICSharpCode.NRefactory.CSharp
 			return MakeSnippetExpression(uncheckedExpression);
 		}
 		
-		CodeObject IAstVisitor<CodeObject>.VisitEmptyExpression(EmptyExpression emptyExpression)
-		{
-			return null;
-		}
-		
 		CodeObject IAstVisitor<CodeObject>.VisitQueryExpression(QueryExpression queryExpression)
 		{
 			return MakeSnippetExpression(queryExpression);
@@ -635,7 +667,7 @@ namespace ICSharpCode.NRefactory.CSharp
 			foreach (Expression expr in attribute.Arguments) {
 				NamedExpression ne = expr as NamedExpression;
 				if (ne != null)
-					attr.Arguments.Add(new CodeAttributeArgument(ne.Identifier, Convert(ne.Expression)));
+					attr.Arguments.Add(new CodeAttributeArgument(ne.Name, Convert(ne.Expression)));
 				else
 					attr.Arguments.Add(new CodeAttributeArgument(Convert(expr)));
 			}
@@ -658,7 +690,7 @@ namespace ICSharpCode.NRefactory.CSharp
 		CodeObject IAstVisitor<CodeObject>.VisitDelegateDeclaration(DelegateDeclaration delegateDeclaration)
 		{
 			CodeTypeDelegate d = new CodeTypeDelegate(delegateDeclaration.Name);
-			d.Attributes = ConvertMemberAttributes(delegateDeclaration.Modifiers);
+			d.Attributes = ConvertMemberAttributes(delegateDeclaration.Modifiers, SymbolKind.TypeDefinition);
 			d.CustomAttributes.AddRange(Convert(delegateDeclaration.Attributes));
 			d.ReturnType = Convert(delegateDeclaration.ReturnType);
 			d.Parameters.AddRange(Convert(delegateDeclaration.Parameters));
@@ -666,12 +698,14 @@ namespace ICSharpCode.NRefactory.CSharp
 			return d;
 		}
 		
-		static MemberAttributes ConvertMemberAttributes(Modifiers modifiers)
+		MemberAttributes ConvertMemberAttributes(Modifiers modifiers, SymbolKind symbolKind)
 		{
 			MemberAttributes a = 0;
 			if ((modifiers & Modifiers.Abstract) != 0)
 				a |= MemberAttributes.Abstract;
 			if ((modifiers & Modifiers.Sealed) != 0)
+				a |= MemberAttributes.Final;
+			if (symbolKind != SymbolKind.TypeDefinition && (modifiers & (Modifiers.Abstract | Modifiers.Override | Modifiers.Virtual)) == 0)
 				a |= MemberAttributes.Final;
 			if ((modifiers & Modifiers.Static) != 0)
 				a |= MemberAttributes.Static;
@@ -719,7 +753,7 @@ namespace ICSharpCode.NRefactory.CSharp
 		{
 			//bool isNestedType = typeStack.Count > 0;
 			CodeTypeDeclaration typeDecl = new CodeTypeDeclaration(typeDeclaration.Name);
-			typeDecl.Attributes = ConvertMemberAttributes(typeDeclaration.Modifiers);
+			typeDecl.Attributes = ConvertMemberAttributes(typeDeclaration.Modifiers, SymbolKind.TypeDefinition);
 			typeDecl.CustomAttributes.AddRange(Convert(typeDeclaration.Attributes));
 			
 			switch (typeDeclaration.ClassType) {
@@ -809,7 +843,12 @@ namespace ICSharpCode.NRefactory.CSharp
 		
 		CodeObject IAstVisitor<CodeObject>.VisitEmptyStatement(EmptyStatement emptyStatement)
 		{
-			return null;
+			return EmptyStatement();
+		}
+		
+		CodeStatement EmptyStatement()
+		{
+			return new CodeExpressionStatement(new CodeObjectCreateExpression(new CodeTypeReference(typeof(object))));
 		}
 		
 		CodeObject IAstVisitor<CodeObject>.VisitExpressionStatement(ExpressionStatement expressionStatement)
@@ -817,8 +856,61 @@ namespace ICSharpCode.NRefactory.CSharp
 			AssignmentExpression assignment = expressionStatement.Expression as AssignmentExpression;
 			if (assignment != null && assignment.Operator == AssignmentOperatorType.Assign) {
 				return new CodeAssignStatement(Convert(assignment.Left), Convert(assignment.Right));
+			} else if (assignment != null && CanBeDuplicatedForCompoundAssignment(assignment.Left)) {
+				CodeBinaryOperatorType op;
+				switch (assignment.Operator) {
+					case AssignmentOperatorType.Add:
+						op = CodeBinaryOperatorType.Add;
+						break;
+					case AssignmentOperatorType.Subtract:
+						op = CodeBinaryOperatorType.Subtract;
+						break;
+					case AssignmentOperatorType.Multiply:
+						op = CodeBinaryOperatorType.Multiply;
+						break;
+					case AssignmentOperatorType.Divide:
+						op = CodeBinaryOperatorType.Divide;
+						break;
+					case AssignmentOperatorType.Modulus:
+						op = CodeBinaryOperatorType.Modulus;
+						break;
+					case AssignmentOperatorType.BitwiseAnd:
+						op = CodeBinaryOperatorType.BitwiseAnd;
+						break;
+					case AssignmentOperatorType.BitwiseOr:
+						op = CodeBinaryOperatorType.BitwiseOr;
+						break;
+					default:
+						return MakeSnippetStatement(expressionStatement);
+				}
+				var cboe = new CodeBinaryOperatorExpression(Convert(assignment.Left), op, Convert(assignment.Right));
+				return new CodeAssignStatement(Convert(assignment.Left), cboe);
+			}
+			UnaryOperatorExpression unary = expressionStatement.Expression as UnaryOperatorExpression;
+			if (unary != null && CanBeDuplicatedForCompoundAssignment(unary.Expression)) {
+				var op = unary.Operator;
+				if (op == UnaryOperatorType.Increment || op == UnaryOperatorType.PostIncrement) {
+					var cboe = new CodeBinaryOperatorExpression(Convert(unary.Expression), CodeBinaryOperatorType.Add, new CodePrimitiveExpression(1));
+					return new CodeAssignStatement(Convert(unary.Expression), cboe);
+				} else if (op == UnaryOperatorType.Decrement || op == UnaryOperatorType.PostDecrement) {
+					var cboe = new CodeBinaryOperatorExpression(Convert(unary.Expression), CodeBinaryOperatorType.Subtract, new CodePrimitiveExpression(1));
+					return new CodeAssignStatement(Convert(unary.Expression), cboe);
+				}
+			}
+			if (assignment != null && assignment.Operator == AssignmentOperatorType.Add) {
+				var rr = Resolve(assignment.Left);
+				if (!rr.IsError && rr.Type.Kind == TypeKind.Delegate) {
+					var expr = (MemberReferenceExpression)assignment.Left;
+					var memberRef = (CodeEventReferenceExpression)HandleMemberReference(Convert(expr.Target), expr.MemberName, expr.TypeArguments, (MemberResolveResult)rr);
+					return new CodeAttachEventStatement(memberRef, Convert(assignment.Right));
+				}
 			}
 			return new CodeExpressionStatement(Convert(expressionStatement.Expression));
+		}
+		
+		bool CanBeDuplicatedForCompoundAssignment(Expression expr)
+		{
+			return expr is IdentifierExpression;
 		}
 		
 		CodeObject IAstVisitor<CodeObject>.VisitFixedStatement(FixedStatement fixedStatement)
@@ -956,7 +1048,7 @@ namespace ICSharpCode.NRefactory.CSharp
 		
 		CodeObject IAstVisitor<CodeObject>.VisitWhileStatement(WhileStatement whileStatement)
 		{
-			return new CodeIterationStatement(null, Convert(whileStatement.Condition), null, ConvertEmbeddedStatement(whileStatement.EmbeddedStatement));
+			return new CodeIterationStatement(EmptyStatement(), Convert(whileStatement.Condition), EmptyStatement(), ConvertEmbeddedStatement(whileStatement.EmbeddedStatement));
 		}
 		
 		CodeObject IAstVisitor<CodeObject>.VisitYieldBreakStatement(YieldBreakStatement yieldBreakStatement)
@@ -977,7 +1069,7 @@ namespace ICSharpCode.NRefactory.CSharp
 		CodeObject IAstVisitor<CodeObject>.VisitConstructorDeclaration(ConstructorDeclaration constructorDeclaration)
 		{
 			CodeConstructor ctor = new CodeConstructor();
-			ctor.Attributes = ConvertMemberAttributes(constructorDeclaration.Modifiers);
+			ctor.Attributes = ConvertMemberAttributes(constructorDeclaration.Modifiers, SymbolKind.Constructor);
 			ctor.CustomAttributes.AddRange(Convert(constructorDeclaration.Attributes));
 			if (constructorDeclaration.Initializer.ConstructorInitializerType == ConstructorInitializerType.This) {
 				ctor.ChainedConstructorArgs.AddRange(Convert(constructorDeclaration.Initializer.Arguments));
@@ -1019,7 +1111,7 @@ namespace ICSharpCode.NRefactory.CSharp
 				}
 				
 				CodeMemberEvent e = new CodeMemberEvent();
-				e.Attributes = ConvertMemberAttributes(eventDeclaration.Modifiers);
+				e.Attributes = ConvertMemberAttributes(eventDeclaration.Modifiers, SymbolKind.Event);
 				e.CustomAttributes.AddRange(Convert(eventDeclaration.Attributes));
 				e.Name = vi.Name;
 				e.Type = Convert(eventDeclaration.ReturnType);
@@ -1037,7 +1129,7 @@ namespace ICSharpCode.NRefactory.CSharp
 		{
 			foreach (VariableInitializer vi in fieldDeclaration.Variables) {
 				CodeMemberField f = new CodeMemberField(Convert(fieldDeclaration.ReturnType), vi.Name);
-				f.Attributes = ConvertMemberAttributes(fieldDeclaration.Modifiers);
+				f.Attributes = ConvertMemberAttributes(fieldDeclaration.Modifiers, SymbolKind.Field);
 				f.CustomAttributes.AddRange(Convert(fieldDeclaration.Attributes));
 				f.InitExpression = ConvertVariableInitializer(vi.Initializer, fieldDeclaration.ReturnType);
 				AddTypeMember(f);
@@ -1048,7 +1140,7 @@ namespace ICSharpCode.NRefactory.CSharp
 		CodeObject IAstVisitor<CodeObject>.VisitIndexerDeclaration(IndexerDeclaration indexerDeclaration)
 		{
 			CodeMemberProperty p = new CodeMemberProperty();
-			p.Attributes = ConvertMemberAttributes(indexerDeclaration.Modifiers);
+			p.Attributes = ConvertMemberAttributes(indexerDeclaration.Modifiers, SymbolKind.Indexer);
 			p.CustomAttributes.AddRange(Convert(indexerDeclaration.Attributes));
 			p.Name = "Items";
 			p.PrivateImplementationType = Convert(indexerDeclaration.PrivateImplementationType);
@@ -1069,7 +1161,7 @@ namespace ICSharpCode.NRefactory.CSharp
 		CodeObject IAstVisitor<CodeObject>.VisitMethodDeclaration(MethodDeclaration methodDeclaration)
 		{
 			CodeMemberMethod m = new CodeMemberMethod();
-			m.Attributes = ConvertMemberAttributes(methodDeclaration.Modifiers);
+			m.Attributes = ConvertMemberAttributes(methodDeclaration.Modifiers, SymbolKind.Method);
 			
 			m.CustomAttributes.AddRange(Convert(methodDeclaration.Attributes.Where(a => a.AttributeTarget != "return")));
 			m.ReturnTypeCustomAttributes.AddRange(Convert(methodDeclaration.Attributes.Where(a => a.AttributeTarget == "return")));
@@ -1087,7 +1179,7 @@ namespace ICSharpCode.NRefactory.CSharp
 		CodeObject IAstVisitor<CodeObject>.VisitOperatorDeclaration(OperatorDeclaration operatorDeclaration)
 		{
 			CodeMemberMethod m = new CodeMemberMethod();
-			m.Attributes = ConvertMemberAttributes(operatorDeclaration.Modifiers);
+			m.Attributes = ConvertMemberAttributes(operatorDeclaration.Modifiers, SymbolKind.Method);
 			
 			m.CustomAttributes.AddRange(Convert(operatorDeclaration.Attributes.Where(a => a.AttributeTarget != "return")));
 			m.ReturnTypeCustomAttributes.AddRange(Convert(operatorDeclaration.Attributes.Where(a => a.AttributeTarget == "return")));
@@ -1129,7 +1221,7 @@ namespace ICSharpCode.NRefactory.CSharp
 		CodeObject IAstVisitor<CodeObject>.VisitPropertyDeclaration(PropertyDeclaration propertyDeclaration)
 		{
 			CodeMemberProperty p = new CodeMemberProperty();
-			p.Attributes = ConvertMemberAttributes(propertyDeclaration.Modifiers);
+			p.Attributes = ConvertMemberAttributes(propertyDeclaration.Modifiers, SymbolKind.Property);
 			p.CustomAttributes.AddRange(Convert(propertyDeclaration.Attributes));
 			p.Name = propertyDeclaration.Name;
 			p.PrivateImplementationType = Convert(propertyDeclaration.PrivateImplementationType);
@@ -1161,10 +1253,11 @@ namespace ICSharpCode.NRefactory.CSharp
 			throw new NotSupportedException(); // should be handled by the parent node
 		}
 		
-		CodeObject IAstVisitor<CodeObject>.VisitCompilationUnit(CompilationUnit compilationUnit)
+		CodeObject IAstVisitor<CodeObject>.VisitSyntaxTree(SyntaxTree syntaxTree)
 		{
 			CodeCompileUnit cu = new CodeCompileUnit();
-			foreach (AstNode node in compilationUnit.Children) {
+			var globalImports = new List<CodeNamespaceImport> ();
+			foreach (AstNode node in syntaxTree.Children) {
 				CodeObject o = node.AcceptVisitor(this);
 				
 				CodeNamespace ns = o as CodeNamespace;
@@ -1175,13 +1268,27 @@ namespace ICSharpCode.NRefactory.CSharp
 				if (td != null) {
 					cu.Namespaces.Add(new CodeNamespace() { Types = { td } });
 				}
+				
+				var import = o as CodeNamespaceImport;
+				if (import != null)
+					globalImports.Add (import);
+			}
+			foreach (var gi in globalImports) {
+				for (int j = 0; j < cu.Namespaces.Count; j++) {
+					var cn = cu.Namespaces [j];
+					bool found = cn.Imports
+						.Cast<CodeNamespaceImport> ()
+						.Any (ns => ns.Namespace == gi.Namespace);
+					if (!found)
+						cn.Imports.Add (gi);
+				}
 			}
 			return cu;
 		}
 		
 		CodeObject IAstVisitor<CodeObject>.VisitSimpleType(SimpleType simpleType)
 		{
-			if (useFullyQualifiedTypeNames) {
+			if (UseFullyQualifiedTypeNames) {
 				IType type = Resolve(simpleType).Type;
 				if (type.Kind != TypeKind.Unknown)
 					return Convert(type);
@@ -1198,7 +1305,7 @@ namespace ICSharpCode.NRefactory.CSharp
 				tr.TypeArguments.AddRange(Convert(memberType.TypeArguments));
 				return tr;
 			}
-			if (useFullyQualifiedTypeNames || memberType.IsDoubleColon) {
+			if (UseFullyQualifiedTypeNames || memberType.IsDoubleColon) {
 				IType type = Resolve(memberType).Type;
 				if (type.Kind != TypeKind.Unknown)
 					return Convert(type);
@@ -1247,12 +1354,12 @@ namespace ICSharpCode.NRefactory.CSharp
 
 		CodeObject IAstVisitor<CodeObject>.VisitNewLine(NewLineNode newLineNode)
 		{
-			throw new NotSupportedException();
+			return null;
 		}
 
 		CodeObject IAstVisitor<CodeObject>.VisitWhitespace(WhitespaceNode whitespaceNode)
 		{
-			throw new NotSupportedException();
+			return null;
 		}
 
 		CodeObject IAstVisitor<CodeObject>.VisitText(TextNode textNode)
@@ -1262,7 +1369,7 @@ namespace ICSharpCode.NRefactory.CSharp
 
 		CodeObject IAstVisitor<CodeObject>.VisitPreProcessorDirective (PreProcessorDirective preProcessorDirective)
 		{
-			return new CodeComment ("#" + preProcessorDirective.Type.ToString ().ToLower ());
+			return new CodeComment ("#" + preProcessorDirective.Type.ToString ().ToLowerInvariant ());
 		}
 		
 		CodeObject IAstVisitor<CodeObject>.VisitTypeParameterDeclaration(TypeParameterDeclaration typeParameterDeclaration)
@@ -1309,7 +1416,7 @@ namespace ICSharpCode.NRefactory.CSharp
 			return null;
 		}
 		
-		CodeObject IAstVisitor<CodeObject>.VisitPatternPlaceholder(AstNode placeholder, ICSharpCode.NRefactory.PatternMatching.Pattern pattern)
+		CodeObject IAstVisitor<CodeObject>.VisitPatternPlaceholder(AstNode placeholder, Pattern pattern)
 		{
 			return null;
 		}

@@ -27,10 +27,10 @@ namespace ICSharpCode.ILSpy.TreeNodes
 	class DerivedTypesEntryNode : ILSpyTreeNode, IMemberTreeNode
 	{
 		private readonly TypeDefinition type;
-		private readonly AssemblyDefinition[] assemblies;
+		private readonly ModuleDefinition[] assemblies;
 		private readonly ThreadingSupport threading;
 
-		public DerivedTypesEntryNode(TypeDefinition type, AssemblyDefinition[] assemblies)
+		public DerivedTypesEntryNode(TypeDefinition type, ModuleDefinition[] assemblies)
 		{
 			this.type = type;
 			this.assemblies = assemblies;
@@ -45,7 +45,7 @@ namespace ICSharpCode.ILSpy.TreeNodes
 
 		public override object Text
 		{
-			get { return this.Language.TypeToString(type, true); }
+			get { return this.Language.TypeToString(type, true) + type.MetadataToken.ToSuffixString(); }
 		}
 
 		public override object Icon

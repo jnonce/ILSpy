@@ -11,6 +11,7 @@
 //
 
 using System;
+using System.Diagnostics;
 
 namespace Mono.CSharp
 {
@@ -18,7 +19,7 @@ namespace Mono.CSharp
 	{
 		public virtual void Visit (MemberCore member)
 		{
-			Console.WriteLine ("unknown member type: " + member.GetType ());
+			Debug.Fail ("unknown member type: " + member.GetType ());
 		}
 
 		public virtual void Visit (ModuleContainer mc)
@@ -50,7 +51,11 @@ namespace Mono.CSharp
 		public virtual void Visit (UsingExternAlias uea)
 		{
 		}
-		
+
+		public virtual void Visit (CompilationSourceFile csf)
+		{
+		}
+
 		public virtual void Visit (Class c)
 		{
 			VisitTypeDefinition (c);
@@ -125,16 +130,16 @@ namespace Mono.CSharp
 		
 		public virtual object Visit (Statement stmt)
 		{
-			Console.WriteLine ("unknown statement:" + stmt);
+			Debug.Fail ("unknown statement:" + stmt);
 			return null;
 		}
 		
-		public virtual object Visit (BlockVariableDeclaration blockVariableDeclaration)
+		public virtual object Visit (BlockVariable blockVariableDeclaration)
 		{
 			return null;
 		}
 		
-		public virtual object Visit (BlockConstantDeclaration blockConstantDeclaration)
+		public virtual object Visit (BlockConstant blockConstantDeclaration)
 		{
 			return null;
 		}
@@ -201,6 +206,11 @@ namespace Mono.CSharp
 		}
 
 		public virtual object Visit (LabeledStatement labeledStatement)
+		{
+			return null;
+		}
+
+		public virtual object Visit (SwitchLabel switchLabel)
 		{
 			return null;
 		}
@@ -309,7 +319,7 @@ namespace Mono.CSharp
 
 		public virtual object Visit (Expression expression)
 		{
-			Console.WriteLine ("Visit unknown expression:" + expression);
+			Debug.Fail ("Visit unknown expression:" + expression);
 			return null;
 		}
 

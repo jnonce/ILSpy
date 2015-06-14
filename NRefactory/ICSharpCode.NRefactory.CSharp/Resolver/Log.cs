@@ -1,4 +1,4 @@
-﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+﻿// Copyright (c) 2010-2013 AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -19,12 +19,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Globalization;
 using System.Linq;
-using System.Text;
-using System.Threading;
-using ICSharpCode.NRefactory.TypeSystem;
-using ICSharpCode.NRefactory.TypeSystem.Implementation;
 
 namespace ICSharpCode.NRefactory.CSharp.Resolver
 {
@@ -37,7 +32,7 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 	{
 		const bool logEnabled = false;
 #if __MonoCS__
-		[Conditional("DEBUG")]
+		[Conditional("MCS_DEBUG")]
 #else
 		[Conditional(logEnabled ? "DEBUG" : "LOG_DISABLED")]
 #endif
@@ -47,7 +42,7 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 		}
 		
 #if __MonoCS__
-		[Conditional("DEBUG")]
+		[Conditional("MCS_DEBUG")]
 #else
 		[Conditional(logEnabled ? "DEBUG" : "LOG_DISABLED")]
 #endif
@@ -57,7 +52,7 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 		}
 		
 #if __MonoCS__
-		[Conditional("DEBUG")]
+		[Conditional("MCS_DEBUG")]
 #else
 		[Conditional(logEnabled ? "DEBUG" : "LOG_DISABLED")]
 #endif
@@ -77,7 +72,7 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 		}
 		
 #if __MonoCS__
-		[Conditional("DEBUG")]
+		[Conditional("MCS_DEBUG")]
 #else
 		[Conditional(logEnabled ? "DEBUG" : "LOG_DISABLED")]
 #endif
@@ -87,7 +82,7 @@ namespace ICSharpCode.NRefactory.CSharp.Resolver
 		}
 		
 #if __MonoCS__
-		[Conditional("DEBUG")]
+		[Conditional("MCS_DEBUG")]
 #else
 		[Conditional(logEnabled ? "DEBUG" : "LOG_DISABLED")]
 #endif

@@ -1,4 +1,4 @@
-﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+﻿// Copyright (c) 2010-2013 AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -23,11 +23,15 @@ namespace ICSharpCode.NRefactory.Semantics
 {
 	/// <summary>
 	/// Represents a resolve error.
+	/// 
+	/// Note: some errors are represented by other classes; for example a <see cref="ConversionResolveResult"/> may
+	/// be erroneous if the conversion is invalid.
 	/// </summary>
+	/// <seealso cref="ResolveResult.IsError"/>.
 	public class ErrorResolveResult : ResolveResult
 	{
 		/// <summary>
-		/// Gets an ErrorResolveResult instance with Type = SharedTypes.UnknownType.
+		/// Gets an ErrorResolveResult instance with <c>Type</c> = <c>SpecialType.UnknownType</c>.
 		/// </summary>
 		public static readonly ErrorResolveResult UnknownError = new ErrorResolveResult(SpecialType.UnknownType);
 		
@@ -35,8 +39,18 @@ namespace ICSharpCode.NRefactory.Semantics
 		{
 		}
 		
+		public ErrorResolveResult(IType type, string message, TextLocation location) : base(type)
+		{
+			this.Message = message;
+			this.Location = location;
+		}
+		
 		public override bool IsError {
 			get { return true; }
 		}
+		
+		public string Message { get; private set; }
+		
+		public TextLocation Location { get; private set; }
 	}
 }

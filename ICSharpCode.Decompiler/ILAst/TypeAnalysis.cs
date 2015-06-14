@@ -303,7 +303,13 @@ namespace ICSharpCode.Decompiler.ILAst
 						return v.Type;
 					}
 				case ILCode.Ldloca:
-					return new ByReferenceType(((ILVariable)expr.Operand).Type);
+					{
+						ILVariable v = (ILVariable)expr.Operand;
+						if (v.Type != null)
+							return new ByReferenceType(v.Type);
+						else
+							return null;
+					}
 					#endregion
 					#region Call / NewObj
 				case ILCode.Call:
@@ -385,23 +391,29 @@ namespace ICSharpCode.Decompiler.ILAst
 				case ILCode.Ldobj:
 					{
 						TypeReference type = (TypeReference)expr.Operand;
-						if (expectedType != null) {
-							int infoAmount = GetInformationAmount(expectedType);
+						var argType = InferTypeForExpression(expr.Arguments[0], null);
+						if (argType is PointerType || argType is ByReferenceType) {
+							var elementType = ((TypeSpecification)argType).ElementType;
+							int infoAmount = GetInformationAmount(elementType);
 							if (infoAmount == 1 && GetInformationAmount(type) == 8) {
 								// A bool can be loaded from both bytes and sbytes.
-								type = expectedType;
+								type = elementType;
 							}
 							if (infoAmount >= 8 && infoAmount <= 64 && infoAmount == GetInformationAmount(type)) {
 								// An integer can be loaded as another integer of the same size.
 								// For integers smaller than 32 bit, the signs must match (as loading performs sign extension)
-								if (infoAmount >= 32 || IsSigned(expectedType) == IsSigned(type))
-									type = expectedType;
+								bool? elementTypeIsSigned = IsSigned(elementType);
+								bool? typeIsSigned = IsSigned(type);
+								if (elementTypeIsSigned != null && typeIsSigned != null) {
+									if (infoAmount >= 32 || elementTypeIsSigned == typeIsSigned)
+										type = elementType;
+								}
 							}
 						}
-						if (forceInferChildren) {
-							if (InferTypeForExpression(expr.Arguments[0], new ByReferenceType(type)) is PointerType)
-								InferTypeForExpression(expr.Arguments[0], new PointerType(type));
-						}
+						if (argType is PointerType)
+							InferTypeForExpression(expr.Arguments[0], new PointerType(type));
+						else
+							InferTypeForExpression(expr.Arguments[0], new ByReferenceType(type));
 						return type;
 					}
 				case ILCode.Stobj:
@@ -438,7 +450,7 @@ namespace ICSharpCode.Decompiler.ILAst
 					return (TypeReference)expr.Operand;
 				case ILCode.Localloc:
 					if (forceInferChildren) {
-						InferTypeForExpression(expr.Arguments[0], typeSystem.Int32);
+						InferTypeForExpression(expr.Arguments[0], null);
 					}
 					if (expectedType is PointerType)
 						return expectedType;
@@ -527,6 +539,8 @@ namespace ICSharpCode.Decompiler.ILAst
 						if (forceInferChildren)
 							InferTypeForExpression(expr.Arguments[1], typeSystem.Int32);
 						TypeReference type = NumericPromotion(InferTypeForExpression(expr.Arguments[0], null));
+						if (type == null)
+							return null;
 						TypeReference expectedInputType = null;
 						switch (type.MetadataType) {
 							case MetadataType.Int32:
@@ -815,7 +829,7 @@ namespace ICSharpCode.Decompiler.ILAst
 				case ILCode.Await:
 					{
 						TypeReference taskType = InferTypeForExpression(expr.Arguments[0], null);
-						if (taskType.Name == "Task`1" && taskType.IsGenericInstance && taskType.Namespace == "System.Threading.Tasks") {
+						if (taskType != null && taskType.Name == "Task`1" && taskType.IsGenericInstance && taskType.Namespace == "System.Threading.Tasks") {
 							return ((GenericInstanceType)taskType).GenericArguments[0];
 						}
 						return null;
@@ -999,7 +1013,7 @@ namespace ICSharpCode.Decompiler.ILAst
 			TypeReference leftPreferred = DoInferTypeForExpression(left, expectedType);
 			if (leftPreferred is PointerType) {
 				left.InferredType = left.ExpectedType = leftPreferred;
-				InferTypeForExpression(right, typeSystem.IntPtr);
+				InferTypeForExpression(right, null);
 				return leftPreferred;
 			}
 			if (IsEnum(leftPreferred)) {
@@ -1010,7 +1024,7 @@ namespace ICSharpCode.Decompiler.ILAst
 			}
 			TypeReference rightPreferred = DoInferTypeForExpression(right, expectedType);
 			if (rightPreferred is PointerType) {
-				InferTypeForExpression(left, typeSystem.IntPtr);
+				InferTypeForExpression(left, null);
 				right.InferredType = right.ExpectedType = rightPreferred;
 				return rightPreferred;
 			}
@@ -1030,7 +1044,10 @@ namespace ICSharpCode.Decompiler.ILAst
 			TypeReference leftPreferred = DoInferTypeForExpression(left, expectedType);
 			if (leftPreferred is PointerType) {
 				left.InferredType = left.ExpectedType = leftPreferred;
-				InferTypeForExpression(right, typeSystem.IntPtr);
+				TypeReference rightPreferred = InferTypeForExpression(right, null);
+				// subtracting two pointers is not a pointer
+				if (rightPreferred is PointerType)
+					return typeSystem.IntPtr;
 				return leftPreferred;
 			}
 			if (IsEnum(leftPreferred)) {

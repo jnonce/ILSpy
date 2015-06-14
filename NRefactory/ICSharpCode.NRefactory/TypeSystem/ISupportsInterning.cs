@@ -1,4 +1,4 @@
-﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+﻿// Copyright (c) 2010-2013 AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -17,25 +17,15 @@
 // DEALINGS IN THE SOFTWARE.
 
 using System;
-using System.Collections.Generic;
-using System.Diagnostics.Contracts;
 
 namespace ICSharpCode.NRefactory.TypeSystem
 {
 	/// <summary>
 	/// Interface for TypeSystem objects that support interning.
-	/// See <see cref="IInterningProvider"/> for more information.
+	/// See <see cref="InterningProvider"/> for more information.
 	/// </summary>
-	#if WITH_CONTRACTS
-	[ContractClass(typeof(ISupportsInterningContract))]
-	#endif
 	public interface ISupportsInterning
 	{
-		/// <summary>
-		/// Interns child objects and strings.
-		/// </summary>
-		void PrepareForInterning(IInterningProvider provider);
-		
 		/// <summary>
 		/// Gets a hash code for interning.
 		/// </summary>
@@ -46,25 +36,4 @@ namespace ICSharpCode.NRefactory.TypeSystem
 		/// </summary>
 		bool EqualsForInterning(ISupportsInterning other);
 	}
-	
-	#if WITH_CONTRACTS
-	[ContractClassFor(typeof(ISupportsInterning))]
-	abstract class ISupportsInterningContract : ISupportsInterning
-	{
-		void ISupportsInterning.PrepareForInterning(IInterningProvider provider)
-		{
-			Contract.Requires(provider != null);
-		}
-		
-		int ISupportsInterning.GetHashCodeForInterning()
-		{
-			return 0;
-		}
-		
-		bool ISupportsInterning.EqualsForInterning(ISupportsInterning other)
-		{
-			return false;
-		}
-	}
-	#endif
 }

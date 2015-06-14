@@ -1,4 +1,4 @@
-﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+﻿// Copyright (c) 2010-2013 AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -160,6 +160,11 @@ namespace ICSharpCode.NRefactory.TypeSystem
 		public override IEnumerable<IMember> GetMembers(Predicate<IUnresolvedMember> filter, GetMemberOptions options)
 		{
 			return GetMembersHelper.GetMembers(this, FilterNonStatic(filter), options);
+		}
+		
+		public override IEnumerable<IMethod> GetAccessors(Predicate<IUnresolvedMethod> filter, GetMemberOptions options)
+		{
+			return GetMembersHelper.GetAccessors(this, FilterNonStatic(filter), options);
 		}
 		
 		static Predicate<T> FilterNonStatic<T>(Predicate<T> filter) where T : class, IUnresolvedMember

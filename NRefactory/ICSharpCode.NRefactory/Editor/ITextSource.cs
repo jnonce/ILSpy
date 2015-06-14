@@ -1,4 +1,4 @@
-﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+﻿// Copyright (c) 2010-2013 AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -95,6 +95,16 @@ namespace ICSharpCode.NRefactory.Editor
 		string GetText(ISegment segment);
 		
 		/// <summary>
+		/// Writes the text from this document into the TextWriter.
+		/// </summary>
+		void WriteTextTo(TextWriter writer);
+		
+		/// <summary>
+		/// Writes the text from this document into the TextWriter.
+		/// </summary>
+		void WriteTextTo(TextWriter writer, int offset, int length);
+		
+		/// <summary>
 		/// Gets the index of the first occurrence of the character in the specified array.
 		/// </summary>
 		/// <param name="c">Character to search for</param>
@@ -176,6 +186,9 @@ namespace ICSharpCode.NRefactory.Editor
 		/// <summary>
 		/// Gets whether this checkpoint belongs to the same document as the other checkpoint.
 		/// </summary>
+		/// <remarks>
+		/// Returns false when given <c>null</c>.
+		/// </remarks>
 		bool BelongsToSameDocumentAs(ITextSourceVersion other);
 		
 		/// <summary>

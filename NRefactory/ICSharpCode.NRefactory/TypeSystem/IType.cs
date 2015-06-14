@@ -1,4 +1,4 @@
-﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+﻿// Copyright (c) 2010-2013 AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -18,7 +18,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics.Contracts;
 
 namespace ICSharpCode.NRefactory.TypeSystem
 {
@@ -81,7 +80,21 @@ namespace ICSharpCode.NRefactory.TypeSystem
 		/// Gets the number of type parameters.
 		/// </summary>
 		int TypeParameterCount { get; }
-		
+
+		/// <summary>
+		/// Gets the type arguments passed to this type.
+		/// If this type is a generic type definition that is not parameterized, this property returns the type parameters,
+		/// as if the type was parameterized with its own type arguments (<c>class C&lt;T&gt; { C&lt;T&gt; field; }</c>).
+		/// 
+		/// NOTE: The type will change to IReadOnlyList&lt;IType&gt; in future versions.
+		/// </summary>
+		IList<IType> TypeArguments { get; }
+
+		/// <summary>
+		/// If true the type represents an instance of a generic type.
+		/// </summary>
+		bool IsParameterized { get; }
+
 		/// <summary>
 		/// Calls ITypeVisitor.Visit for this type.
 		/// </summary>
@@ -107,10 +120,26 @@ namespace ICSharpCode.NRefactory.TypeSystem
 		/// Creates a type reference that can be used to look up a type equivalent to this type in another compilation.
 		/// </summary>
 		/// <remarks>
-		/// If this type is open, the resulting type reference will need to be looked up in an appropriate generic context.
-		/// If this type is closed, the resulting type reference can be looked up in the main resolve context of another compilation.
+		/// If this type contains open generics, the resulting type reference will need to be looked up in an appropriate generic context.
+		/// Otherwise, the main resolve context of a compilation is sufficient.
 		/// </remarks>
 		ITypeReference ToTypeReference();
+
+		/// <summary>
+		/// Gets a type visitor that performs the substitution of class type parameters with the type arguments
+		/// of this parameterized type.
+		/// Returns TypeParameterSubstitution.Identity if the type is not parametrized.
+		/// </summary>
+		TypeParameterSubstitution GetSubstitution();
+		
+		/// <summary>
+		/// Gets a type visitor that performs the substitution of class type parameters with the type arguments
+		/// of this parameterized type,
+		/// and also substitutes method type parameters with the specified method type arguments.
+		/// Returns TypeParameterSubstitution.Identity if the type is not parametrized.
+		/// </summary>
+		TypeParameterSubstitution GetSubstitution(IList<IType> methodTypeArguments);
+
 		
 		/// <summary>
 		/// Gets inner classes (including inherited inner classes).
@@ -194,7 +223,7 @@ namespace ICSharpCode.NRefactory.TypeSystem
 		/// <param name="options">Specified additional options for the GetMembers() operation.</param>
 		/// <remarks>
 		/// <para>
-		/// The result does not include constructors.
+		/// The result does not include constructors or accessors.
 		/// </para>
 		/// <para>
 		/// For methods on parameterized types, type substitution will be performed on the method signature,
@@ -221,7 +250,7 @@ namespace ICSharpCode.NRefactory.TypeSystem
 		/// The filter is tested on the original method definitions (before specialization).</param>
 		/// <param name="options">Specified additional options for the GetMembers() operation.</param>
 		/// <remarks>
-		/// <para>The result does not include constructors.</para>
+		/// <para>The result does not include constructors or accessors.</para>
 		/// <para>
 		/// Type substitution will be performed on the method signature, creating a <see cref="Implementation.SpecializedMethod"/>
 		/// with the specified type arguments.
@@ -288,6 +317,17 @@ namespace ICSharpCode.NRefactory.TypeSystem
 		/// </para>
 		/// </remarks>
 		IEnumerable<IMember> GetMembers(Predicate<IUnresolvedMember> filter = null, GetMemberOptions options = GetMemberOptions.None);
+		
+		/// <summary>
+		/// Gets all accessors belonging to properties or events on this type.
+		/// </summary>
+		/// <param name="filter">The filter used to select which members to return.
+		/// The filter is tested on the original member definitions (before specialization).</param>
+		/// <param name="options">Specified additional options for the GetMembers() operation.</param>
+		/// <remarks>
+		/// Accessors are not returned by GetMembers() or GetMethods().
+		/// </remarks>
+		IEnumerable<IMethod> GetAccessors(Predicate<IUnresolvedMethod> filter = null, GetMemberOptions options = GetMemberOptions.None);
 	}
 	
 	[Flags]

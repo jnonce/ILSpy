@@ -160,4 +160,29 @@ public static class ValueTypes
 		s.SetField();
 		return p;
 	}
+	
+	public static void UseRefBoolInCondition(ref bool x)
+	{
+		if (x) 
+		{
+			Console.WriteLine("true");
+		}
+	}
+
+	public static void CompareNotEqual0IsReallyNotEqual(IComparable<int> a)
+	{
+		if (a.CompareTo(0) != 0)
+		{
+			Console.WriteLine("true");
+		}
+	}
+
+	public static void CompareEqual0IsReallyEqual(IComparable<int> a)
+	{
+		if (a.CompareTo(0) == 0)
+		{
+			Console.WriteLine("true");
+		}
+	}
+
 }
